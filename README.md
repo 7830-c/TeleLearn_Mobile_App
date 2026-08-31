@@ -47,19 +47,19 @@
 
 ```mermaid
 graph TD
-    A[TeleLearn Flutter Client] -->|Direct Surface Scanout| B[Native ExoPlayer Media3]
-    A -->|Resilient HTTP Range| C[Download Engine / Storage]
-    A -->|Local Persistence| D[(SQLite Local DB)]
+    A["TeleLearn Flutter Client"] -->|Direct Surface Scanout| B["Native ExoPlayer Media3"]
+    A -->|Resilient HTTP Range| C["Download Engine / Storage"]
+    A -->|Local Persistence| D[("SQLite Local DB")]
     
-    subgraph In-App Localhost Proxy (127.0.0.1:8765)
-        B -->|Local HTTP Range Stream| E[LocalStreamingServer]
+    subgraph Proxy ["In-App Localhost Proxy (127.0.0.1:8765)"]
+        B -->|Local HTTP Range Stream| E["LocalStreamingServer"]
         C -->|Persistent Download Stream| E
-        E -->|Zero-Copy Uint8ListView| F[In-Memory Chunk Cache (4MB)]
-        E -->|Async Background Flush| G[Local Disk Cache (tg_*.bin)]
+        E -->|Zero-Copy Uint8ListView| F["In-Memory Chunk Cache (4MB)"]
+        E -->|Async Background Flush| G["Local Disk Cache (tg_*.bin)"]
     end
 
-    subgraph Telegram Cloud Network
-        E -->|Direct Encrypted MTProto TCP/TLS| H[Telegram DCs 1–5 (91.108.56.x / 149.154.167.x)]
+    subgraph Telegram ["Telegram Cloud Network"]
+        E -->|Direct Encrypted MTProto TCP/TLS| H["Telegram DCs 1-5 (91.108.56.x / 149.154.167.x)"]
     end
 ```
 
