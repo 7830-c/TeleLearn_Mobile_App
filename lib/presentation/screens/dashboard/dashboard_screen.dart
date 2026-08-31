@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/duration_formatter.dart';
 import '../../../core/utils/toast_utils.dart';
+import '../../../data/models/course_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/progress_provider.dart';
@@ -66,6 +67,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (mounted) {
       ToastUtils.showSnackBar(context, 'Dashboard updated', isSuccess: true);
+    }
+  }
+
+  Future<void> _handleSyncCourse(CourseModel course) async {
+    final authPhone = context.read<AuthProvider>().phoneNumber;
+    ToastUtils.showSnackBar(context, 'Syncing "${course.title}" from Telegram...', isSuccess: true);
+    try {
+      await context.read<CourseProvider>().syncCourse(course.id, phone: authPhone);
+      if (mounted) {
+        ToastUtils.showSnackBar(context, 'Successfully synchronized "${course.title}" with Telegram!', isSuccess: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ToastUtils.showSnackBar(context, 'Failed to sync course: $e', isError: true);
+      }
     }
   }
 
@@ -372,6 +388,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           courseId: continueWatching.courseId,
                           lessonId: continueWatching.lessonId,
                           autoPlay: true,
+                          fromDashboard: true,
                         ),
                       ),
                     );
@@ -598,10 +615,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     );
                   },
                   onDelete: () => _handleDeleteCourse(course.id, course.title),
-                  onSync: () async {
-                    ToastUtils.showSnackBar(context, 'Syncing ${course.title}...', isSuccess: true);
-                    await _handleRefresh();
-                  },
+                  onSync: () => _handleSyncCourse(course),
                 );
               },
             ),

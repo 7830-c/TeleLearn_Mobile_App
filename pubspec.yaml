@@ -23,6 +23,8 @@ dependencies:
   http: ^1.2.2
   crypto: ^3.0.3
   open_filex: ^4.5.0
+  tg: ^0.0.20
+  t: ^229.0.0
 
 dev_dependencies:
   flutter_test:

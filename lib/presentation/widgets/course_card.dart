@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/course_model.dart';
+import '../../providers/course_provider.dart';
 import '../../providers/progress_provider.dart';
 
 class CourseCard extends StatelessWidget {
@@ -131,17 +132,28 @@ class CourseCard extends StatelessWidget {
                               ),
                               Row(
                                 children: [
-                                  InkWell(
-                                    onTap: onSync,
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(5),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withValues(alpha: 0.3),
+                                  Builder(
+                                    builder: (context) {
+                                      final isSyncing = context.watch<CourseProvider>().isChannelSyncing(course.channelId);
+                                      return InkWell(
+                                        onTap: isSyncing ? null : onSync,
                                         borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Icon(Icons.refresh_rounded, size: 15, color: Colors.white),
-                                    ),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(5),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withValues(alpha: 0.3),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: isSyncing
+                                              ? const SizedBox(
+                                                  width: 15,
+                                                  height: 15,
+                                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                                )
+                                              : const Icon(Icons.refresh_rounded, size: 15, color: Colors.white),
+                                        ),
+                                      );
+                                    },
                                   ),
                                   const SizedBox(width: 6),
                                   InkWell(

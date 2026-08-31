@@ -246,6 +246,9 @@ class DownloadProvider extends ChangeNotifier {
       if (!remoteUrl.contains('quality=')) {
         remoteUrl += remoteUrl.contains('?') ? '&quality=high' : '?quality=high';
       }
+      if (!remoteUrl.contains('is_download=')) {
+        remoteUrl += remoteUrl.contains('?') ? '&is_download=1' : '?is_download=1';
+      }
 
       // Execute high-speed direct stream download
       final actualSize = await _executeStreamDownload(
@@ -357,21 +360,7 @@ class DownloadProvider extends ChangeNotifier {
         }
       }
 
-      if (task.course.channelId > 0) {
-        for (final base in [
-          'https://telelearn.onrender.com/api',
-          'http://10.0.2.2:8000/api',
-          'http://127.0.0.1:8000/api',
-        ]) {
-          final encodedPhone = task.userPhone.isNotEmpty ? Uri.encodeComponent(task.userPhone) : cleanPhone;
-          final u1 = '$base/courses/download/$encodedPhone/${task.course.channelId}/${task.itemId}';
-          final u2 = '$base/courses/download/$cleanPhone/${task.course.channelId}/${task.itemId}';
-          final u3 = '$base/courses/download/$cleanPhone/-${task.course.channelId}/${task.itemId}';
-          if (!candidateUrls.contains(u1)) candidateUrls.add(u1);
-          if (!candidateUrls.contains(u2)) candidateUrls.add(u2);
-          if (!candidateUrls.contains(u3)) candidateUrls.add(u3);
-        }
-      }
+
 
       String? lastError;
       for (final url in candidateUrls) {
@@ -385,7 +374,7 @@ class DownloadProvider extends ChangeNotifier {
             task: task,
             estimatedSize: task.totalBytes,
           );
-          if (actualSize > 500) {
+          if (actualSize > 0) {
             downloadedFromRemote = true;
             break;
           }
@@ -630,6 +619,7 @@ class DownloadProvider extends ChangeNotifier {
   }
 
   /// Resilient Resumable High-Speed Download Engine (Supports Pause/Resume & Network Switches)
+  /// Uses dual-stream parallel downloading for large files (>5MB) to increase throughput.
   Future<int> _executeStreamDownload({
     required String url,
     required File tempFile,
@@ -642,12 +632,185 @@ class DownloadProvider extends ChangeNotifier {
 
     // Standard high-speed browser headers (Matches Web Browser Speed)
     const browserHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
+      'User-Agent': 'TeleLearnDownloader/2.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
       'Accept': '*/*',
       'Accept-Encoding': 'identity',
       'Connection': 'keep-alive',
     };
 
+    // Discover total file size via a small Range probe if unknown
+    if (totalBytes <= 0) {
+      try {
+        final probeClient = http.Client();
+        final probeReq = http.Request('GET', uri);
+        probeReq.headers.addAll(browserHeaders);
+        probeReq.headers['range'] = 'bytes=0-0';
+        final probeRes = await probeClient.send(probeReq).timeout(const Duration(seconds: 10));
+        if (probeRes.statusCode == 206) {
+          final contentRange = probeRes.headers['content-range'] ?? '';
+          final totalMatch = RegExp(r'/(\d+)').firstMatch(contentRange);
+          if (totalMatch != null) {
+            totalBytes = int.parse(totalMatch.group(1)!);
+          }
+        } else if (probeRes.statusCode == 200 && (probeRes.contentLength ?? 0) > 0) {
+          totalBytes = probeRes.contentLength!;
+        }
+        await probeRes.stream.drain();
+        probeClient.close();
+      } catch (_) {}
+    }
+    if (totalBytes > 0) {
+      task.totalBytes = totalBytes;
+    }
+
+    // Use dual-stream parallel download for large files with known size (Remote only)
+    const int parallelThreshold = 5 * 1024 * 1024; // 5 MB
+    final int existingBytes = tempFile.existsSync() ? tempFile.lengthSync() : 0;
+    final isLocalServer = uri.host == '127.0.0.1' || uri.host == 'localhost';
+    if (!isLocalServer && totalBytes > parallelThreshold && existingBytes == 0) {
+      try {
+        final result = await _executeDualStreamDownload(
+          uri: uri,
+          headers: browserHeaders,
+          totalBytes: totalBytes,
+          tempFile: tempFile,
+          destinationFile: destinationFile,
+          task: task,
+        );
+        if (result > 0) return result;
+        if (task.isCancelled || task.isPaused) return 0;
+      } catch (e) {
+        debugPrint('[DownloadProvider] Dual-stream failed, falling back to single-stream: $e');
+        if (task.isCancelled || task.isPaused) return 0;
+      }
+    }
+
+    return _executeSingleStreamDownload(
+      uri: uri,
+      headers: browserHeaders,
+      totalBytes: totalBytes,
+      tempFile: tempFile,
+      destinationFile: destinationFile,
+      task: task,
+    );
+  }
+
+  /// Dual-stream parallel download: splits the file into 2 concurrent Range streams.
+  Future<int> _executeDualStreamDownload({
+    required Uri uri,
+    required Map<String, String> headers,
+    required int totalBytes,
+    required File tempFile,
+    required File destinationFile,
+    required DownloadTask task,
+  }) async {
+    final int midpoint = totalBytes ~/ 2;
+    final part1File = File('${tempFile.path}.part1');
+    final part2File = File('${tempFile.path}.part2');
+
+    int part1Bytes = 0;
+    int part2Bytes = 0;
+    DateTime lastUiUpdate = DateTime.now();
+    DateTime lastSpeedTime = DateTime.now();
+    int bytesAtLastSpeed = 0;
+
+    void updateProgress() {
+      final totalReceived = part1Bytes + part2Bytes;
+      task.downloadedBytes = totalReceived;
+
+      final now = DateTime.now();
+      final elapsedMs = now.difference(lastSpeedTime).inMilliseconds;
+      if (elapsedMs >= 500) {
+        final deltaBytes = totalReceived - bytesAtLastSpeed;
+        final double currentSpeed = (deltaBytes / (elapsedMs / 1000.0));
+        task.speedBytesPerSec = task.speedBytesPerSec == 0.0
+            ? currentSpeed
+            : (task.speedBytesPerSec * 0.35 + currentSpeed * 0.65);
+        if (task.speedBytesPerSec > 0 && totalBytes > totalReceived) {
+          task.remainingSeconds = ((totalBytes - totalReceived) / task.speedBytesPerSec).round();
+        }
+        lastSpeedTime = now;
+        bytesAtLastSpeed = totalReceived;
+      }
+
+      if (now.difference(lastUiUpdate).inMilliseconds > 500 || totalReceived >= totalBytes) {
+        lastUiUpdate = now;
+        task.progress = (totalReceived / totalBytes).clamp(0.0, 1.0);
+        notifyListeners();
+      }
+    }
+
+    Future<int> downloadRange(int start, int end, File outputFile) async {
+      final client = http.Client();
+      try {
+        final req = http.Request('GET', uri);
+        req.headers.addAll(headers);
+        req.headers['range'] = 'bytes=$start-$end';
+        final response = await client.send(req).timeout(const Duration(seconds: 25));
+        if (response.statusCode >= 400) {
+          throw Exception('HTTP ${response.statusCode} for range $start-$end');
+        }
+
+        final sink = outputFile.openWrite(mode: FileMode.write);
+        int written = 0;
+        await for (final chunk in response.stream) {
+          if (task.isCancelled || task.isPaused) {
+            await sink.flush();
+            await sink.close();
+            client.close();
+            return 0;
+          }
+          sink.add(chunk);
+          written += chunk.length;
+          if (start == 0) {
+            part1Bytes = written;
+          } else {
+            part2Bytes = written;
+          }
+          updateProgress();
+        }
+        await sink.flush();
+        await sink.close();
+        return written;
+      } finally {
+        client.close();
+      }
+    }
+
+    final results = await Future.wait([
+      downloadRange(0, midpoint - 1, part1File),
+      downloadRange(midpoint, totalBytes - 1, part2File),
+    ]);
+
+    if (task.isCancelled || task.isPaused) return 0;
+
+    if (results[0] <= 0 || results[1] <= 0) {
+      try { if (part1File.existsSync()) await part1File.delete(); } catch (_) {}
+      try { if (part2File.existsSync()) await part2File.delete(); } catch (_) {}
+      throw Exception('Dual-stream download incomplete: part1=${results[0]}, part2=${results[1]}');
+    }
+
+    final sink = destinationFile.openWrite(mode: FileMode.write);
+    await sink.addStream(part1File.openRead());
+    await sink.addStream(part2File.openRead());
+    await sink.flush();
+    await sink.close();
+
+    try { if (part1File.existsSync()) await part1File.delete(); } catch (_) {}
+    try { if (part2File.existsSync()) await part2File.delete(); } catch (_) {}
+
+    return destinationFile.lengthSync();
+  }
+
+  /// Single-stream download with resume support.
+  Future<int> _executeSingleStreamDownload({
+    required Uri uri,
+    required Map<String, String> headers,
+    required int totalBytes,
+    required File tempFile,
+    required File destinationFile,
+    required DownloadTask task,
+  }) async {
     int retryCount = 0;
     const int maxRetries = 5;
 
@@ -660,9 +823,8 @@ class DownloadProvider extends ChangeNotifier {
       try {
         final int existingBytes = tempFile.existsSync() ? tempFile.lengthSync() : 0;
         final req = http.Request('GET', uri);
-        req.headers.addAll(browserHeaders);
+        req.headers.addAll(headers);
 
-        // Resume from existing byte offset if paused or disconnected
         if (existingBytes > 0) {
           req.headers['range'] = 'bytes=$existingBytes-';
         }
@@ -672,7 +834,6 @@ class DownloadProvider extends ChangeNotifier {
           throw Exception('Server returned HTTP ${response.statusCode}');
         }
 
-        // 416 = Range Not Satisfiable (already fully downloaded)
         if (response.statusCode == 416) {
           if (destinationFile.existsSync()) await destinationFile.delete();
           await tempFile.rename(destinationFile.path);
@@ -704,7 +865,6 @@ class DownloadProvider extends ChangeNotifier {
         }
         notifyListeners();
 
-        // If server sent full 200 OK instead of 206, overwrite; otherwise append
         final sink = tempFile.openWrite(mode: isPartial ? FileMode.append : FileMode.write);
         DateTime lastUiUpdate = DateTime.now();
         DateTime lastSpeedTime = DateTime.now();
@@ -727,7 +887,6 @@ class DownloadProvider extends ChangeNotifier {
           if (elapsedMs >= 500) {
             final deltaBytes = receivedBytes - bytesAtLastSpeed;
             final double currentSpeed = (deltaBytes / (elapsedMs / 1000.0));
-            // Exponential smoothing for steady speed/ETA display
             task.speedBytesPerSec = task.speedBytesPerSec == 0.0
                 ? currentSpeed
                 : (task.speedBytesPerSec * 0.35 + currentSpeed * 0.65);
@@ -738,7 +897,7 @@ class DownloadProvider extends ChangeNotifier {
             bytesAtLastSpeed = receivedBytes;
           }
 
-          if (now.difference(lastUiUpdate).inMilliseconds > 150 || receivedBytes >= totalBytes) {
+          if (now.difference(lastUiUpdate).inMilliseconds > 500 || receivedBytes >= totalBytes) {
             lastUiUpdate = now;
             if (totalBytes > 0) {
               task.progress = (receivedBytes / totalBytes).clamp(0.0, 1.0);
@@ -757,7 +916,6 @@ class DownloadProvider extends ChangeNotifier {
           throw Exception('Downloaded file is incomplete ($writtenSize bytes)');
         }
 
-        // Atomically finalize file
         if (destinationFile.existsSync()) {
           await destinationFile.delete();
         }

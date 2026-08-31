@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../core/constants/app_constants.dart';
+import 'telegram_auth_service.dart';
 
 /// Path B: Segmented Disposable Chunk Streaming Engine
 /// Architecture Highlights:
@@ -23,6 +24,13 @@ class LocalStreamingServer {
   Directory? _cacheDir;
   static const int _maxCacheBytes = 300 * 1024 * 1024; // 300 MB disposable cap
   static const int _chunkSizeBytes = 2 * 1024 * 1024; // 2 MB chunk block
+
+  static int _activeStreamEpoch = 0;
+
+  /// Abort all previous in-flight MTProto background stream loops
+  static void abortPreviousStreams() {
+    _activeStreamEpoch++;
+  }
 
   LocalStreamingServer._init();
 
@@ -76,6 +84,9 @@ class LocalStreamingServer {
 
   String getProxiedStreamUrl(String remoteUrl, {String quality = 'turbo'}) {
     if (!_isRunning) return remoteUrl;
+    if (remoteUrl.startsWith('http://127.0.0.1:$_port') || remoteUrl.startsWith('http://localhost:$_port')) {
+      return remoteUrl;
+    }
     final encoded = Uri.encodeComponent(remoteUrl);
     return 'http://127.0.0.1:$_port/stream?url=$encoded&quality=$quality';
   }
@@ -135,6 +146,11 @@ class LocalStreamingServer {
       return;
     }
 
+    if (path == '/tg_stream') {
+      await _streamTelegramDocument(request, response, request.uri.queryParameters);
+      return;
+    }
+
     if (path == '/stream') {
       final remoteUrl = request.uri.queryParameters['url'];
       if (remoteUrl == null || remoteUrl.isEmpty) {
@@ -144,12 +160,293 @@ class LocalStreamingServer {
         return;
       }
 
+      if (remoteUrl.contains('/tg_stream')) {
+        final parsedUri = Uri.parse(remoteUrl);
+        await _streamTelegramDocument(request, response, parsedUri.queryParameters);
+        return;
+      }
+
       await _streamSegmented(request, response, remoteUrl);
       return;
     }
 
     response.statusCode = HttpStatus.notFound;
     await response.close();
+  }
+
+  static final Map<String, Uint8List> _memChunkCache = {};
+  static const int _maxMemChunks = 16; // 4 MB RAM cache (lightweight on memory)
+
+  static void _putMemChunk(String key, Uint8List bytes) {
+    if (_memChunkCache.length >= _maxMemChunks) {
+      _memChunkCache.remove(_memChunkCache.keys.first);
+    }
+    _memChunkCache[key] = bytes;
+  }
+
+  static final Map<String, Future<Uint8List?>> _inFlightChunkFutures = {};
+
+  Future<void> _streamTelegramDocument(
+    HttpRequest clientReq,
+    HttpResponse clientRes,
+    Map<String, String> params,
+  ) async {
+    try {
+      final dcId = int.tryParse(params['dc_id'] ?? '2') ?? 2;
+      final docId = int.tryParse(params['doc_id'] ?? '') ?? 0;
+      final accessHash = int.tryParse(params['access_hash'] ?? '') ?? 0;
+      final totalSize = int.tryParse(params['size'] ?? '') ?? 0;
+      final fileRefHex = params['file_ref'] ?? '';
+      final mime = params['mime'] ?? 'video/mp4';
+
+      if (docId == 0 || accessHash == 0 || fileRefHex.isEmpty) {
+        clientRes.statusCode = HttpStatus.badRequest;
+        clientRes.write('Missing Telegram document metadata parameters');
+        await clientRes.close();
+        return;
+      }
+
+      final fileRefBytes = _hexToBytes(fileRefHex);
+      if (fileRefBytes.isEmpty) {
+        clientRes.statusCode = HttpStatus.badRequest;
+        clientRes.write('Invalid file reference hex string');
+        await clientRes.close();
+        return;
+      }
+
+      final rangeHeader = clientReq.headers.value('range');
+
+      int startByte = 0;
+      int endByte = totalSize > 0 ? (totalSize - 1) : 0;
+      int statusCode = HttpStatus.ok;
+
+      if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+        final rangeVal = rangeHeader.substring(6).trim();
+        if (rangeVal.startsWith('-')) {
+          // Suffix range: bytes=-500000
+          final suffixLength = int.tryParse(rangeVal.substring(1)) ?? 0;
+          if (totalSize > 0 && suffixLength > 0) {
+            startByte = (totalSize - suffixLength).clamp(0, totalSize - 1);
+            endByte = totalSize - 1;
+            statusCode = HttpStatus.partialContent;
+          }
+        } else {
+          final parts = rangeVal.split('-');
+          if (parts.isNotEmpty) {
+            startByte = int.tryParse(parts[0]) ?? 0;
+            if (parts.length > 1 && parts[1].isNotEmpty) {
+              final parsedEnd = int.tryParse(parts[1]);
+              if (parsedEnd != null && parsedEnd >= startByte) {
+                endByte = parsedEnd;
+              }
+            } else if (totalSize > 0) {
+              endByte = totalSize - 1;
+            }
+            statusCode = HttpStatus.partialContent;
+          }
+        }
+      }
+
+      // Protect against out-of-bound ranges (prevent ExoPlayer Inconsistent headers / ParserException)
+      if (totalSize > 0) {
+        if (startByte >= totalSize) {
+          clientRes.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+          clientRes.headers.set('Content-Range', 'bytes */$totalSize');
+          await clientRes.close();
+          return;
+        }
+        if (endByte >= totalSize) {
+          endByte = totalSize - 1;
+        }
+      }
+
+      final clen = (totalSize > 0 && endByte >= startByte) ? (endByte - startByte + 1) : 0;
+
+      clientRes.statusCode = statusCode;
+      clientRes.headers.set('Content-Type', mime.isNotEmpty ? mime : 'video/mp4');
+      clientRes.headers.set('Accept-Ranges', 'bytes');
+      clientRes.headers.set('Access-Control-Allow-Origin', '*');
+      clientRes.headers.set('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
+      clientRes.headers.set('Cache-Control', 'private, max-age=604800');
+
+      if (statusCode == HttpStatus.partialContent && totalSize > 0) {
+        clientRes.headers.set('Content-Range', 'bytes $startByte-$endByte/$totalSize');
+        clientRes.headers.set('Content-Length', '$clen');
+      } else if (totalSize > 0) {
+        clientRes.headers.set('Content-Length', '$totalSize');
+      }
+
+      // Stream chunks (256 KB per MTProto request for low-latency & UI smoothness)
+      const int tgChunkSize = 256 * 1024;
+      final startChunk = startByte ~/ tgChunkSize;
+      final endChunk = (endByte ~/ tgChunkSize);
+
+      Future<Uint8List?> fetchChunk(int chunkIdx) async {
+        final cacheKey = '${docId}_$chunkIdx';
+        if (_memChunkCache.containsKey(cacheKey)) {
+          return _memChunkCache[cacheKey];
+        }
+
+        final chunkFile = _cacheDir != null ? File(p.join(_cacheDir!.path, 'tg_${docId}_chunk_$chunkIdx.bin')) : null;
+        if (chunkFile != null && chunkFile.existsSync() && chunkFile.lengthSync() > 0) {
+          try {
+            final b = await chunkFile.readAsBytes();
+            _putMemChunk(cacheKey, b);
+            return b;
+          } catch (_) {}
+        }
+
+        // Deduplicate simultaneous requests for the same chunk
+        if (_inFlightChunkFutures.containsKey(cacheKey)) {
+          return await _inFlightChunkFutures[cacheKey];
+        }
+
+        final future = _doDownloadChunk(
+          dcId: dcId,
+          docId: docId,
+          accessHash: accessHash,
+          fileRefBytes: fileRefBytes,
+          chunkIdx: chunkIdx,
+          tgChunkSize: tgChunkSize,
+          chunkFile: chunkFile,
+          cacheKey: cacheKey,
+        );
+
+        _inFlightChunkFutures[cacheKey] = future;
+        try {
+          return await future;
+        } finally {
+          _inFlightChunkFutures.remove(cacheKey);
+        }
+      }
+
+      // Only prefetch if continuous playback stream (> 128KB requested), avoiding network flooding on small metadata probes
+      final bool isContinuousStream = clen > 128 * 1024;
+
+      void triggerPrefetch(int nextChunkIdx) {
+        if (!isContinuousStream || nextChunkIdx > endChunk) return;
+        // Prefetch up to 3 chunks ahead in parallel pipeline for 0-latency playback
+        for (int p = 0; p < 3; p++) {
+          final targetIdx = nextChunkIdx + p;
+          if (targetIdx > endChunk) break;
+          final nextKey = '${docId}_$targetIdx';
+          if (_memChunkCache.containsKey(nextKey) || _inFlightChunkFutures.containsKey(nextKey)) continue;
+          unawaited(fetchChunk(targetIdx));
+        }
+      }
+
+      // Track active session epoch to abort orphaned background work when switching videos (exempting download tasks)
+      final bool isDownloader = params['is_download'] == '1' || clientReq.headers.value('user-agent')?.contains('TeleLearnDownloader') == true;
+      final int sessionEpoch = _activeStreamEpoch;
+      bool isClientDisconnected = false;
+      clientRes.done.catchError((_) {
+        isClientDisconnected = true;
+      });
+
+      int remaining = clen;
+      int currentOffset = startByte;
+
+      for (int c = startChunk; c <= endChunk; c++) {
+        if (remaining <= 0 || isClientDisconnected) break;
+        if (!isDownloader && _activeStreamEpoch != sessionEpoch) break;
+
+        // Pipeline upcoming chunk in background
+        if (isContinuousStream && c + 1 <= endChunk && (isDownloader || _activeStreamEpoch == sessionEpoch)) {
+          triggerPrefetch(c + 1);
+        }
+
+        final chunkBytes = await fetchChunk(c);
+        if ((!isDownloader && _activeStreamEpoch != sessionEpoch) || isClientDisconnected) break;
+        if (chunkBytes == null || chunkBytes.isEmpty) {
+          break;
+        }
+
+        final chunkOffset = c * tgChunkSize;
+        final offsetInChunk = currentOffset - chunkOffset;
+        if (offsetInChunk < 0 || offsetInChunk >= chunkBytes.length) {
+          break;
+        }
+
+        final availableInChunk = chunkBytes.length - offsetInChunk;
+        final toSend = (remaining < availableInChunk) ? remaining : availableInChunk;
+
+        try {
+          if (offsetInChunk == 0 && toSend == chunkBytes.length) {
+            clientRes.add(chunkBytes);
+          } else {
+            clientRes.add(Uint8List.sublistView(chunkBytes, offsetInChunk, offsetInChunk + toSend));
+          }
+          await clientRes.flush();
+          // Yield microtask to Flutter UI isolate to keep 60 FPS scrolling and prevent ANR
+          await Future<void>.delayed(Duration.zero);
+        } catch (_) {
+          // Client closed connection (e.g. user seeked, switched videos, or closed screen)
+          isClientDisconnected = true;
+          break;
+        }
+
+        currentOffset += toSend;
+        remaining -= toSend;
+      }
+
+      try {
+        await clientRes.close();
+      } catch (_) {}
+    } catch (e) {
+      debugPrint('[LocalStreamingServer] Telegram streaming note: $e');
+      try {
+        await clientRes.close();
+      } catch (_) {}
+    }
+  }
+
+  Future<Uint8List?> _doDownloadChunk({
+    required int dcId,
+    required int docId,
+    required int accessHash,
+    required Uint8List fileRefBytes,
+    required int chunkIdx,
+    required int tgChunkSize,
+    required File? chunkFile,
+    required String cacheKey,
+  }) async {
+    final chunkOffset = chunkIdx * tgChunkSize;
+    for (int retry = 0; retry < 3; retry++) {
+      final b = await TelegramAuthService.downloadFileChunk(
+        dcId: dcId,
+        docId: docId,
+        accessHash: accessHash,
+        fileReference: fileRefBytes,
+        offset: chunkOffset,
+        limit: tgChunkSize,
+      );
+
+      if (b != null && b.isNotEmpty) {
+        _putMemChunk(cacheKey, b);
+        if (chunkFile != null) {
+          unawaited(chunkFile.writeAsBytes(b, flush: false).catchError((_) => chunkFile));
+        }
+        return b;
+      }
+      if (retry < 2) {
+        await Future.delayed(Duration(milliseconds: 150 * (retry + 1)));
+      }
+    }
+    return null;
+  }
+
+  static Uint8List _hexToBytes(String hex) {
+    try {
+      final clean = Uri.decodeComponent(hex).replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
+      if (clean.isEmpty || clean.length % 2 != 0) return Uint8List(0);
+      final result = Uint8List(clean.length ~/ 2);
+      for (int i = 0; i < clean.length; i += 2) {
+        result[i ~/ 2] = int.parse(clean.substring(i, i + 2), radix: 16);
+      }
+      return result;
+    } catch (_) {
+      return Uint8List(0);
+    }
   }
 
   Future<void> _streamSegmented(
@@ -251,3 +548,4 @@ class LocalStreamingServer {
     }
   }
 }
+

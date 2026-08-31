@@ -18,10 +18,6 @@ class AddCourseScreen extends StatefulWidget {
 class _AddCourseScreenState extends State<AddCourseScreen> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _customChannelController = TextEditingController();
-  List<TelegramChannelInfo> _channels = [];
-  bool _isLoading = true;
-  final Set<int> _syncingChannelIds = {};
-  final Set<int> _syncedChannelIds = {};
   final Set<int> _selectedChannelIds = {};
   bool _isBatchSyncing = false;
   String? _batchStatusMessage;
@@ -29,7 +25,10 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
   @override
   void initState() {
     super.initState();
-    _loadChannels();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final phone = context.read<AuthProvider>().phoneNumber;
+      context.read<CourseProvider>().loadAvailableChannels(phone: phone);
+    });
   }
 
   @override
@@ -39,22 +38,15 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
     super.dispose();
   }
 
-  Future<void> _loadChannels() async {
+  Future<void> _refreshChannels() async {
     final phone = context.read<AuthProvider>().phoneNumber;
-    setState(() => _isLoading = true);
-    final list = await TelegramImportService.getAvailableChannels(phone);
-    if (mounted) {
-      setState(() {
-        _channels = list;
-        _isLoading = false;
-      });
-    }
+    await context.read<CourseProvider>().loadAvailableChannels(phone: phone, forceRefresh: true);
   }
 
   bool _isAlreadyImported(TelegramChannelInfo channel, List<dynamic> existingCourses) {
-    if (_syncedChannelIds.contains(channel.id)) return true;
     for (final c in existingCourses) {
-      if (c.channelId == channel.id.toString() ||
+      if (c.channelId == channel.id ||
+          c.id == channel.id.toString() ||
           c.title.trim().toLowerCase() == channel.name.trim().toLowerCase()) {
         return true;
       }
@@ -64,14 +56,12 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
 
   Future<void> _handleImport(TelegramChannelInfo channel, {bool navigate = true}) async {
     final phone = context.read<AuthProvider>().phoneNumber;
-    setState(() => _syncingChannelIds.add(channel.id));
+    ToastUtils.showSnackBar(context, 'Syncing "${channel.name}" from Telegram in background...', isSuccess: true);
 
     try {
       final course = await context.read<CourseProvider>().importChannel(channel, phone: phone);
       if (mounted) {
         setState(() {
-          _syncedChannelIds.add(channel.id);
-          _syncingChannelIds.remove(channel.id);
           _selectedChannelIds.remove(channel.id);
         });
 
@@ -84,17 +74,16 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _syncingChannelIds.remove(channel.id));
         ToastUtils.showSnackBar(context, 'Failed to sync channel: $e', isError: true);
       }
     }
   }
 
-  Future<void> _handleBatchImport(List<dynamic> existingCourses) async {
+  Future<void> _handleBatchImport(List<dynamic> existingCourses, List<TelegramChannelInfo> channels) async {
     if (_selectedChannelIds.isEmpty || _isBatchSyncing) return;
 
     final phone = context.read<AuthProvider>().phoneNumber;
-    final toImport = _channels
+    final toImport = channels
         .where((c) => _selectedChannelIds.contains(c.id) && !_isAlreadyImported(c, existingCourses))
         .toList();
 
@@ -114,7 +103,6 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
       if (!mounted) break;
 
       setState(() {
-        _syncingChannelIds.add(channel.id);
         _batchStatusMessage = 'Syncing (${i + 1}/${toImport.length}): "${channel.name}"...';
       });
 
@@ -122,17 +110,12 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
         await context.read<CourseProvider>().importChannel(channel, phone: phone);
         if (mounted) {
           setState(() {
-            _syncedChannelIds.add(channel.id);
-            _syncingChannelIds.remove(channel.id);
             _selectedChannelIds.remove(channel.id);
           });
           successfulCount++;
         }
       } catch (e) {
         debugPrint('[AddCourseScreen] Failed batch item ${channel.name}: $e');
-        if (mounted) {
-          setState(() => _syncingChannelIds.remove(channel.id));
-        }
       }
     }
 
@@ -152,21 +135,26 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
   }
 
   Future<void> _handleCustomImport() async {
-    final name = _customChannelController.text.trim();
-    if (name.isEmpty) {
+    final input = _customChannelController.text.trim();
+    if (input.isEmpty) {
       ToastUtils.showSnackBar(context, 'Please enter a channel name or link', isError: true);
       return;
     }
 
-    final customChannel = TelegramChannelInfo(
-      id: DateTime.now().millisecondsSinceEpoch,
-      name: name,
-      isChannel: true,
-      isGroup: false,
-      memberCount: 5000,
-      messageCount: 120,
-    );
+    ToastUtils.showSnackBar(context, 'Resolving Telegram channel...', isSuccess: true);
+    final resolved = await TelegramImportService.resolvePublicChannel(input);
 
+    final customChannel = resolved ??
+        TelegramChannelInfo(
+          id: DateTime.now().millisecondsSinceEpoch,
+          name: input,
+          isChannel: true,
+          isGroup: false,
+          memberCount: 5000,
+          messageCount: 120,
+        );
+
+    _customChannelController.clear();
     await _handleImport(customChannel);
   }
 
@@ -185,10 +173,13 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final existingCourses = context.watch<CourseProvider>().courses;
+    final courseProvider = context.watch<CourseProvider>();
+    final existingCourses = courseProvider.courses;
+    final channels = courseProvider.availableChannels;
+    final isLoadingChannels = courseProvider.isLoadingChannels;
 
     final query = _searchController.text.trim().toLowerCase();
-    final filteredChannels = _channels.where((c) =>
+    final filteredChannels = channels.where((c) =>
         c.name.toLowerCase().contains(query)).toList();
 
     final unimportedCount = filteredChannels.where((c) => !_isAlreadyImported(c, existingCourses)).length;
@@ -243,7 +234,7 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
                     ),
                     const SizedBox(width: 12),
                     ElevatedButton.icon(
-                      onPressed: _isBatchSyncing ? null : () => _handleBatchImport(existingCourses),
+                      onPressed: _isBatchSyncing ? null : () => _handleBatchImport(existingCourses, channels),
                       icon: _isBatchSyncing
                           ? const SizedBox(
                               width: 14,
@@ -449,7 +440,7 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
                   IconButton(
                     icon: const Icon(Icons.refresh_rounded, size: 18),
                     tooltip: 'Refresh channels',
-                    onPressed: _loadChannels,
+                    onPressed: _refreshChannels,
                   ),
                 ],
               ),
@@ -498,7 +489,7 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
           const SizedBox(height: 16),
 
           // Channels List
-          if (_isLoading)
+          if (isLoadingChannels)
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
@@ -525,7 +516,7 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
               separatorBuilder: (_, __) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
                 final channel = filteredChannels[index];
-                final isSyncing = _syncingChannelIds.contains(channel.id);
+                final isSyncing = courseProvider.isChannelSyncing(channel.id);
                 final isAlreadyImported = _isAlreadyImported(channel, existingCourses);
                 final isSelected = _selectedChannelIds.contains(channel.id);
 

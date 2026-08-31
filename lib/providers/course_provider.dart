@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../data/models/course_model.dart';
 import '../data/local_db/app_database.dart';
@@ -9,6 +10,14 @@ class CourseProvider extends ChangeNotifier {
   String _searchQuery = '';
   String _activeUserPhone = '';
 
+  // Cached available channels (fetched once, refresh on demand)
+  List<TelegramChannelInfo> _availableChannels = [];
+  bool _isLoadingChannels = false;
+
+  // Background sync tracking that persists across navigation
+  final Set<int> _syncingChannelIds = {};
+  String? _currentSyncStatus;
+
   List<CourseModel> get courses {
     if (_searchQuery.trim().isEmpty) return _courses;
     return _courses.where((c) =>
@@ -18,6 +27,12 @@ class CourseProvider extends ChangeNotifier {
 
   bool get isLoading => _isLoading;
   String get searchQuery => _searchQuery;
+  List<TelegramChannelInfo> get availableChannels => _availableChannels;
+  bool get isLoadingChannels => _isLoadingChannels;
+  Set<int> get syncingChannelIds => _syncingChannelIds;
+  String? get currentSyncStatus => _currentSyncStatus;
+
+  bool isChannelSyncing(int channelId) => _syncingChannelIds.contains(channelId);
 
   CourseProvider();
 
@@ -43,8 +58,30 @@ class CourseProvider extends ChangeNotifier {
     }
   }
 
+  /// Load Telegram channels once, and only re-fetch if forceRefresh is true
+  Future<void> loadAvailableChannels({required String phone, bool forceRefresh = false}) async {
+    if (_availableChannels.isNotEmpty && !forceRefresh) {
+      return;
+    }
+
+    _isLoadingChannels = true;
+    notifyListeners();
+
+    try {
+      final list = await TelegramImportService.getAvailableChannels(phone);
+      _availableChannels = list;
+    } catch (e) {
+      debugPrint('[CourseProvider] Error fetching channels: $e');
+    } finally {
+      _isLoadingChannels = false;
+      notifyListeners();
+    }
+  }
+
   void clearForUser() {
     _courses.clear();
+    _availableChannels.clear();
+    _syncingChannelIds.clear();
     _activeUserPhone = '';
     _searchQuery = '';
     notifyListeners();
@@ -83,13 +120,92 @@ class CourseProvider extends ChangeNotifier {
     await loadCourses(userPhone: _activeUserPhone);
   }
 
+  // Sequential synchronization queue lock to ensure low memory load and smooth 60 FPS UI
+  Future<void> _syncQueueLock = Future.value();
+
   Future<CourseModel> importChannel(TelegramChannelInfo channel, {required String phone}) async {
-    final newCourse = await TelegramImportService.syncCourseFromTelegram(
-      phone: phone,
-      channelId: channel.id,
-    );
-    await AppDatabase.instance.insertCourse(newCourse, userPhone: phone);
-    await loadCourses(userPhone: phone);
-    return newCourse;
+    _syncingChannelIds.add(channel.id);
+    _currentSyncStatus = 'Queued "${channel.name}"...';
+    notifyListeners();
+
+    final completer = Completer<CourseModel>();
+    _syncQueueLock = _syncQueueLock.then((_) async {
+      try {
+        _currentSyncStatus = 'Syncing "${channel.name}"...';
+        notifyListeners();
+
+        final newCourse = await TelegramImportService.syncCourseFromTelegram(
+          phone: phone,
+          channelId: channel.id,
+          accessHash: channel.accessHash,
+          channelName: channel.name,
+        );
+        await AppDatabase.instance.insertCourse(newCourse, userPhone: phone);
+        await loadCourses(userPhone: phone);
+        completer.complete(newCourse);
+      } catch (e, st) {
+        completer.completeError(e, st);
+      } finally {
+        _syncingChannelIds.remove(channel.id);
+        _currentSyncStatus = null;
+        notifyListeners();
+      }
+    }).catchError((e, st) {
+      if (!completer.isCompleted) completer.completeError(e, st);
+    });
+
+    return completer.future;
+  }
+
+  Future<CourseModel> syncCourse(String courseId, {required String phone}) async {
+    final existing = getCourse(courseId);
+    final channelId = existing?.channelId ?? int.tryParse(courseId) ?? 0;
+
+    _syncingChannelIds.add(channelId);
+    _currentSyncStatus = 'Queued "${existing?.title ?? 'Course'}"...';
+    notifyListeners();
+
+    final completer = Completer<CourseModel>();
+    _syncQueueLock = _syncQueueLock.then((_) async {
+      try {
+        _currentSyncStatus = 'Refreshing "${existing?.title ?? 'Course'}"...';
+        notifyListeners();
+
+        final updatedCourse = await TelegramImportService.syncCourseFromTelegram(
+          phone: phone,
+          channelId: channelId,
+          channelName: existing?.title,
+        );
+
+        // Safe Guard: Only update SQLite if new sync returned real modules, or if existing is empty
+        if (updatedCourse.modules.isNotEmpty && updatedCourse.modules.any((m) => m.lessons.isNotEmpty || m.notes.isNotEmpty)) {
+          await AppDatabase.instance.insertCourse(updatedCourse, userPhone: phone);
+          await loadCourses(userPhone: phone);
+          completer.complete(updatedCourse);
+        } else {
+          completer.complete(existing ?? updatedCourse);
+        }
+      } catch (e, st) {
+        if (existing != null) {
+          completer.complete(existing);
+        } else {
+          completer.completeError(e, st);
+        }
+      } finally {
+        _syncingChannelIds.remove(channelId);
+        _currentSyncStatus = null;
+        notifyListeners();
+      }
+    }).catchError((e, st) {
+      if (!completer.isCompleted) {
+        if (existing != null) {
+          completer.complete(existing);
+        } else {
+          completer.completeError(e, st);
+        }
+      }
+    });
+
+    return completer.future;
   }
 }

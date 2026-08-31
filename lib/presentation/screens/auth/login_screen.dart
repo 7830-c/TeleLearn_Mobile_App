@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/toast_utils.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/theme_provider.dart';
 import '../../widgets/app_layout_scaffold.dart';
@@ -47,10 +48,16 @@ class _LoginScreenState extends State<LoginScreen> {
     final res = await auth.sendOtpCode(phone);
 
     if (res.success) {
-      // Auto-transition: authStep is now 2, clear OTP field for fresh entry
+      // Clear OTP field for fresh entry of real Telegram verification code
       _otpController.clear();
+      if (mounted) {
+        ToastUtils.showSnackBar(context, 'OTP sent to your Telegram app', isSuccess: true);
+      }
+    } else {
+      if (mounted && res.error != null && res.error!.isNotEmpty) {
+        ToastUtils.showSnackBar(context, res.error!, isError: true);
+      }
     }
-    // If failed, authProvider.errorMessage is set and displayed automatically
   }
 
   Future<void> _handleVerifyOtp() async {
@@ -478,16 +485,17 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           onSubmitted: (_) => _handleVerifyOtp(),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 8),
                         Text(
-                          'Enter the code sent to your Telegram app',
+                          'Enter the verification code sent to your Telegram app or phone',
                           textAlign: TextAlign.center,
                           style: GoogleFonts.inter(
-                            fontSize: 11,
+                            fontSize: 12,
                             color: textSecondary,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 16),
 
                         // Verify & Enter Dashboard Button
                         SizedBox(

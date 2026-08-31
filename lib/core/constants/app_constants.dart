@@ -23,4 +23,10 @@ class AppConstants {
 
   // Default streaming host port
   static const int localProxyPort = 8765;
+
+  // Telegram MTProto Credentials
+  static const int telegramApiId = 33952264;
+  static const String telegramApiHash = '6a51d05428a6b7906e17f61d20a533df';
+  static const String telegramServerBaseUrl = 'https://api.telegram.org';
+  static const String telegramGatewayToken = ''; // Optional Telegram Gateway Bearer Token (gateway.telegram.org)
 }

@@ -74,7 +74,12 @@ class _AppLayoutScaffoldState extends State<AppLayoutScaffold> {
 
     setState(() {
       _currentIndex = index;
-      if (index == 2) {
+      if (index == 0) {
+        final phone = context.read<AuthProvider>().phoneNumber;
+        if (phone.isNotEmpty) {
+          context.read<ProgressProvider>().loadProgressMetrics(userPhone: phone);
+        }
+      } else if (index == 2) {
         _lastSeenDownloadCount = dlCount;
       } else if (index == 3) {
         _lastSeenBookmarkCount = bmCount;

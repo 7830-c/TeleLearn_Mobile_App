@@ -153,6 +153,60 @@ class ProgressProvider extends ChangeNotifier {
     await loadProgressMetrics(userPhone: phone);
   }
 
+  /// Lightweight progress save for periodic timer during playback.
+  /// Does optimistic local update + SQLite write WITHOUT reloading
+  /// course progress or metrics (avoids 3x cascading rebuilds every 5s).
+  Future<void> saveProgressQuiet({
+    required String courseId,
+    required int lessonId,
+    required int progressSeconds,
+    required int durationSeconds,
+    bool? isCompleted,
+    int deltaSeconds = 0,
+    String userPhone = '',
+  }) async {
+    final phone = userPhone.isNotEmpty ? userPhone : _activeUserPhone;
+
+    // Optimistic local update (single notifyListeners)
+    final currentList = List<LessonProgress>.from(_courseProgressMap[courseId] ?? []);
+    final existingIdx = currentList.indexWhere((p) => p.lessonId == lessonId);
+    final isDone = isCompleted ?? (durationSeconds > 0 && progressSeconds >= durationSeconds * 0.9);
+    final updatedItem = LessonProgress(
+      courseId: courseId,
+      lessonId: lessonId,
+      progressSeconds: progressSeconds,
+      durationSeconds: durationSeconds,
+      isCompleted: isDone,
+      lastWatchedAt: DateTime.now(),
+    );
+
+    if (existingIdx >= 0) {
+      currentList[existingIdx] = updatedItem;
+    } else {
+      currentList.add(updatedItem);
+    }
+    _courseProgressMap[courseId] = currentList;
+    notifyListeners();
+
+    // SQLite write only — no reload cascade
+    await AppDatabase.instance.saveLessonProgress(
+      courseId: courseId,
+      lessonId: lessonId,
+      progressSeconds: progressSeconds,
+      durationSeconds: durationSeconds,
+      isCompleted: isCompleted,
+      deltaSeconds: deltaSeconds,
+      userPhone: phone,
+    );
+
+    // Keep Continue Watching fresh for Dashboard without manual refresh
+    final cw = await AppDatabase.instance.getContinueWatching(userPhone: phone);
+    if (cw != null) {
+      _continueWatching = cw;
+      notifyListeners();
+    }
+  }
+
   Future<void> toggleLessonCompleted({
     required String courseId,
     required int lessonId,

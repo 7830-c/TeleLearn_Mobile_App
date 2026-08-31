@@ -142,6 +142,22 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
     );
   }
 
+  Future<void> _handleSync() async {
+    ToastUtils.showSnackBar(context, 'Syncing all lectures and notes from Telegram...', isSuccess: true);
+    try {
+      final phone = context.read<AuthProvider>().phoneNumber;
+      final courseProvider = context.read<CourseProvider>();
+      await courseProvider.syncCourse(widget.courseId, phone: phone);
+      if (mounted) {
+        ToastUtils.showSnackBar(context, 'Course fully synchronized with Telegram!', isSuccess: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ToastUtils.showSnackBar(context, 'Sync error: $e', isError: true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -180,8 +196,18 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
         ? course.modules.where((m) => m.id == _activeModuleId).firstOrNull
         : null;
 
-    return Scaffold(
-      backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
+    final isSyncing = courseProvider.isChannelSyncing(course.channelId);
+
+    return PopScope(
+      canPop: _activeModuleId == null,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_activeModuleId != null) {
+          setState(() => _activeModuleId = null);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
@@ -204,11 +230,67 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
               tooltip: 'Rename Module',
               onPressed: () => _showRenameDialog(currentModule),
             ),
+          IconButton(
+            icon: isSyncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.sync_rounded, size: 22),
+            tooltip: isSyncing ? 'Syncing...' : 'Sync Full Channel Content',
+            onPressed: isSyncing ? null : _handleSync,
+          ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Background Syncing Indicator Banner
+          if (isSyncing) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.primary.withValues(alpha: 0.15) : AppColors.primaryLight.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Synchronizing course with Telegram...',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : const Color(0xFF0F172A),
+                          ),
+                        ),
+                        Text(
+                          'Updating video lectures, topics, and reference documents in background.',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           // Header Card
           Container(
             padding: const EdgeInsets.all(18),
@@ -976,6 +1058,7 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
           const SizedBox(height: 40),
         ],
       ),
-    );
+    ),
+  );
   }
 }
