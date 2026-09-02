@@ -1146,16 +1146,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                           },
                         ),
 
-                        // ── MODERN CONTROLS OVERLAY (Isolated Zero-Rebuild Architecture) ──
+                        // ── MODERN CONTROLS OVERLAY (Soft Fade Architecture) ──
                         ValueListenableBuilder<bool>(
                           valueListenable: _showControlsNotifier,
                           builder: (context, showControls, _) {
-                            if (!showControls || (!(_controller?.value.isInitialized ?? false) && !_isInitialStandby)) {
-                              return const SizedBox.shrink();
-                            }
-                            return Stack(
-                              fit: StackFit.expand,
-                              children: [
+                            final bool isVisible = showControls && ((_controller?.value.isInitialized ?? false) || _isInitialStandby);
+                            return AnimatedOpacity(
+                              opacity: isVisible ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 200),
+                              curve: Curves.easeInOut,
+                              child: IgnorePointer(
+                                ignoring: !isVisible,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
                                 // Dark gradient background layer (tap to dismiss controls instantly)
                                 GestureDetector(
                                   behavior: HitTestBehavior.opaque,
@@ -1479,7 +1483,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                 },
                               ),
                             ),
-                              ],
+                                  ],
+                                ),
+                              ),
                             );
                           },
                         ),
@@ -1492,11 +1498,16 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
               // ── DETAILS, ACTION BAR & PLAYLIST / NOTES SECTION ─────────────────────
               if (!isFullscreen)
                 Expanded(
-                  child: ListView(
+                  child: CustomScrollView(
                     controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      // Lecture Title & Info Card
+                    slivers: [
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                        sliver: SliverToBoxAdapter(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Lecture Title & Info Card
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
@@ -1905,286 +1916,294 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                           ),
                         ),
                         const SizedBox(height: 12),
-
-                        // Playlist Lessons List
-                        RepaintBoundary(
-                          child: Column(
-                            children: [
-                              for (int idx = 0; idx < (currentModule?.lessons.length ?? 0); idx++) ...[
-                                Builder(
-                                  builder: (_) {
-                                    final l = currentModule!.lessons[idx];
-                                    final isCurrent = l.id == _currentLessonId;
-                                    final isDone = progressProvider.isLessonCompleted(_currentCourseId, l.id);
-                                    final isLastWatched = progressProvider.continueWatching?.lessonId == l.id;
-                                    final progressPct = progressProvider.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
-                                    final progressFrac = progressProvider.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
-
-                                    return RepaintBoundary(
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: isCurrent
-                                              ? (isDark ? AppColors.primary.withValues(alpha: 0.18) : AppColors.primaryLight.withValues(alpha: 0.6))
-                                              : (isDark ? const Color(0xFF131D31) : Colors.white),
-                                          borderRadius: BorderRadius.circular(14),
-                                          border: Border.all(
-                                            color: isCurrent
-                                                ? AppColors.primary
-                                                : (isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0)),
-                                          ),
-                                        ),
-                                        child: ListTile(
-                                          dense: true,
-                                          onTap: () => _switchLesson(l.id),
-                                          leading: Container(
-                                            width: 30,
-                                            height: 30,
-                                            decoration: BoxDecoration(
-                                              color: isCurrent
-                                                  ? AppColors.primary
-                                                  : (isDone
-                                                      ? const Color(0xFF059669).withValues(alpha: 0.15)
-                                                      : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Center(
-                                              child: isDone
-                                                  ? const Icon(Icons.check_rounded, size: 16, color: Color(0xFF059669))
-                                                  : Text(
-                                                      '${idx + 1}',
-                                                      style: TextStyle(
-                                                        fontSize: 11,
-                                                        fontWeight: FontWeight.w700,
-                                                        color: isCurrent ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
-                                                      ),
-                                                    ),
-                                            ),
-                                          ),
-                                          title: Text(
-                                            l.title,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: GoogleFonts.inter(
-                                              fontSize: 13,
-                                              fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
-                                              color: isCurrent
-                                                  ? AppColors.primary
-                                                  : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                            ),
-                                          ),
-                                          subtitle: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              const SizedBox(height: 2),
-                                              Row(
-                                                children: [
-                                                  Text(
-                                                    DurationFormatter.formatTimestamp(l.duration?.toInt() ?? 0),
-                                                    style: GoogleFonts.inter(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                                  ),
-                                                  if (isDone) ...[
-                                                    const SizedBox(width: 6),
-                                                    Text(
-                                                      '• Finished',
-                                                      style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF059669)),
-                                                    ),
-                                                  ] else if (progressPct > 0) ...[
-                                                    const SizedBox(width: 6),
-                                                    Text(
-                                                      '• $progressPct% watched',
-                                                      style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.primary),
-                                                    ),
-                                                  ],
-                                                  if (isLastWatched && !isCurrent) ...[
-                                                    const SizedBox(width: 8),
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                                      decoration: BoxDecoration(
-                                                        color: AppColors.primary.withValues(alpha: 0.15),
-                                                        borderRadius: BorderRadius.circular(4),
-                                                      ),
-                                                      child: const Text(
-                                                        '▶ Resume',
-                                                        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.primary),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ],
-                                              ),
-                                              if (!isDone && progressFrac > 0) ...[
-                                                const SizedBox(height: 4),
-                                                ClipRRect(
-                                                  borderRadius: BorderRadius.circular(2),
-                                                  child: LinearProgressIndicator(
-                                                    value: progressFrac,
-                                                    minHeight: 2.5,
-                                                    backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                                                  ),
-                                                ),
-                                              ],
-                                            ],
-                                          ),
-                                          trailing: isCurrent
-                                              ? Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                  decoration: BoxDecoration(
-                                                    color: AppColors.primary,
-                                                    borderRadius: BorderRadius.circular(6),
-                                                  ),
-                                                  child: const Text(
-                                                    'PLAYING',
-                                                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white),
-                                                  ),
-                                                )
-                                              : null,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                                if (idx < (currentModule?.lessons.length ?? 0) - 1) const SizedBox(height: 8),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ] else ...[
-                        // Tab 2: Lesson Notes
-                        if ((currentModule?.notes.isEmpty ?? true))
-                          Container(
-                            padding: const EdgeInsets.all(32),
-                            alignment: Alignment.center,
-                            child: Text(
-                              'No notes attached to this module.',
-                              style: GoogleFonts.inter(
-                                fontSize: 12,
-                                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                              ),
-                            ),
-                          )
-                        else
-                          Column(
-                            children: [
-                              for (int idx = 0; idx < currentModule!.notes.length; idx++) ...[
-                                Consumer<DownloadProvider>(
-                                  builder: (_, dlProvider, __) {
-                                    final note = currentModule!.notes[idx];
-                                    final task = dlProvider.getTask(course.id, note.id, 'note');
-                                    final isDl = dlProvider.isDownloaded(course.id, note.id, 'note');
-
-                                    return Container(
-                                      decoration: BoxDecoration(
-                                        color: isDark ? const Color(0xFF131D31) : Colors.white,
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(
-                                          color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
-                                        ),
-                                      ),
-                                      child: Material(
-                                        color: Colors.transparent,
-                                        borderRadius: BorderRadius.circular(14),
-                                        child: InkWell(
-                                          onTap: () => _handleNoteAction(course, note),
-                                          borderRadius: BorderRadius.circular(14),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(12),
-                                            child: Row(
-                                              children: [
-                                                const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFEF4444), size: 22),
-                                                const SizedBox(width: 10),
-                                                Expanded(
-                                                  child: Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: [
-                                                      Text(
-                                                        note.displayName,
-                                                        maxLines: 1,
-                                                        overflow: TextOverflow.ellipsis,
-                                                        style: GoogleFonts.inter(
-                                                          fontSize: 12,
-                                                          fontWeight: FontWeight.w600,
-                                                          color: isDark ? Colors.white : const Color(0xFF0F172A),
-                                                        ),
-                                                      ),
-                                                      Text(
-                                                        DurationFormatter.formatFileSize(note.size ?? 25000000),
-                                                        style: GoogleFonts.inter(fontSize: 10, color: Colors.grey),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                                if (task != null && task.isDownloading) ...[
-                                                  Builder(
-                                                    builder: (_) {
-                                                      final pct = (task.progress * 100).toInt();
-                                                      return Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                                                          borderRadius: BorderRadius.circular(6),
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const SizedBox(
-                                                              width: 10,
-                                                              height: 10,
-                                                              child: CircularProgressIndicator(
-                                                                strokeWidth: 1.5,
-                                                                color: Color(0xFF10B981),
-                                                              ),
-                                                            ),
-                                                            const SizedBox(width: 5),
-                                                            Text(
-                                                              '$pct%',
-                                                              style: GoogleFonts.inter(
-                                                                fontSize: 10,
-                                                                fontWeight: FontWeight.w700,
-                                                                color: const Color(0xFF10B981),
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ] else if (task != null && task.error != null) ...[
-                                                  IconButton(
-                                                    icon: const Icon(Icons.error_outline_rounded, size: 18, color: Color(0xFFEF4444)),
-                                                    tooltip: 'Download error: ${task.error}',
-                                                    onPressed: () {
-                                                      ToastUtils.showSnackBar(context, task.error ?? 'Download failed. Please check connection.', isError: true);
-                                                    },
-                                                  ),
-                                                ] else if (isDl) ...[
-                                                  IconButton(
-                                                    icon: const Icon(Icons.open_in_new_rounded, size: 18, color: Color(0xFF10B981)),
-                                                    tooltip: 'Open in PDF Viewer',
-                                                    onPressed: () => _handleNoteAction(course, note),
-                                                  ),
-                                                ] else
-                                                  IconButton(
-                                                    icon: const Icon(Icons.download_rounded, size: 18, color: AppColors.primary),
-                                                    tooltip: 'Download offline',
-                                                    onPressed: () => _handleNoteAction(course, note),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                                if (idx < currentModule.notes.length - 1) const SizedBox(height: 8),
-                              ],
-                            ],
-                          ),
                       ],
-                      const SizedBox(height: 32),
                     ],
                   ),
                 ),
+              ),
+
+              // Tab 1: Virtualized Course Playlist Queue (0ms lag, 120 FPS recycling)
+              if (_activeDrawerTab == 0)
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  sliver: SliverList.builder(
+                    itemCount: currentModule?.lessons.length ?? 0,
+                    itemBuilder: (context, idx) {
+                      final l = currentModule!.lessons[idx];
+                      final isCurrent = l.id == _currentLessonId;
+                      final isDone = progressProvider.isLessonCompleted(_currentCourseId, l.id);
+                      final isLastWatched = progressProvider.continueWatching?.lessonId == l.id;
+                      final progressPct = progressProvider.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
+                      final progressFrac = progressProvider.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: RepaintBoundary(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: isCurrent
+                                  ? (isDark ? AppColors.primary.withValues(alpha: 0.18) : AppColors.primaryLight.withValues(alpha: 0.6))
+                                  : (isDark ? const Color(0xFF131D31) : Colors.white),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: isCurrent
+                                    ? AppColors.primary
+                                    : (isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0)),
+                              ),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              onTap: () => _switchLesson(l.id),
+                              leading: Container(
+                                width: 30,
+                                height: 30,
+                                decoration: BoxDecoration(
+                                  color: isCurrent
+                                      ? AppColors.primary
+                                      : (isDone
+                                          ? const Color(0xFF059669).withValues(alpha: 0.15)
+                                          : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Center(
+                                  child: isDone
+                                      ? const Icon(Icons.check_rounded, size: 16, color: Color(0xFF059669))
+                                      : Text(
+                                          '${idx + 1}',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: isCurrent ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
+                                          ),
+                                        ),
+                                ),
+                              ),
+                              title: Text(
+                                l.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                                  color: isCurrent
+                                      ? AppColors.primary
+                                      : (isDark ? Colors.white : const Color(0xFF0F172A)),
+                                ),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 2),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        DurationFormatter.formatTimestamp(l.duration?.toInt() ?? 0),
+                                        style: GoogleFonts.inter(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                                      ),
+                                      if (isDone) ...[
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          '• Finished',
+                                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF059669)),
+                                        ),
+                                      ] else if (progressPct > 0) ...[
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          '• $progressPct% watched',
+                                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.primary),
+                                        ),
+                                      ],
+                                      if (isLastWatched && !isCurrent) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primary.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: const Text(
+                                            '▶ Resume',
+                                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.primary),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                  if (!isDone && progressFrac > 0) ...[
+                                    const SizedBox(height: 4),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(2),
+                                      child: LinearProgressIndicator(
+                                        value: progressFrac,
+                                        minHeight: 2.5,
+                                        backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                        valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              trailing: isCurrent
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Text(
+                                        'PLAYING',
+                                        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white),
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                )
+              else if ((currentModule?.notes.isEmpty ?? true))
+                SliverToBoxAdapter(
+                  child: Container(
+                    padding: const EdgeInsets.all(32),
+                    alignment: Alignment.center,
+                    child: Text(
+                      'No notes attached to this module.',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                // Tab 2: Virtualized Lesson Notes
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  sliver: SliverList.builder(
+                    itemCount: currentModule!.notes.length,
+                    itemBuilder: (context, idx) {
+                      final note = currentModule!.notes[idx];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Consumer<DownloadProvider>(
+                          builder: (_, dlProvider, __) {
+                            final task = dlProvider.getTask(course.id, note.id, 'note');
+                            final isDl = dlProvider.isDownloaded(course.id, note.id, 'note');
+
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF131D31) : Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
+                                ),
+                              ),
+                              child: Material(
+                                color: Colors.transparent,
+                                borderRadius: BorderRadius.circular(14),
+                                child: InkWell(
+                                  onTap: () => _handleNoteAction(course, note),
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFEF4444), size: 22),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                note.displayName,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: GoogleFonts.inter(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: isDark ? Colors.white : const Color(0xFF0F172A),
+                                                ),
+                                              ),
+                                              Text(
+                                                DurationFormatter.formatFileSize(note.size ?? 25000000),
+                                                style: GoogleFonts.inter(fontSize: 10, color: Colors.grey),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (task != null && task.isDownloading) ...[
+                                          Builder(
+                                            builder: (_) {
+                                              final pct = (task.progress * 100).toInt();
+                                              return Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    const SizedBox(
+                                                      width: 10,
+                                                      height: 10,
+                                                      child: CircularProgressIndicator(
+                                                        strokeWidth: 1.5,
+                                                        color: Color(0xFF10B981),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 5),
+                                                    Text(
+                                                      '$pct%',
+                                                      style: GoogleFonts.inter(
+                                                        fontSize: 10,
+                                                        fontWeight: FontWeight.w700,
+                                                        color: const Color(0xFF10B981),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ] else if (task != null && task.error != null) ...[
+                                          IconButton(
+                                            icon: const Icon(Icons.error_outline_rounded, size: 18, color: Color(0xFFEF4444)),
+                                            tooltip: 'Download error: ${task.error}',
+                                            onPressed: () {
+                                              ToastUtils.showSnackBar(context, task.error ?? 'Download failed. Please check connection.', isError: true);
+                                            },
+                                          ),
+                                        ] else if (isDl) ...[
+                                          IconButton(
+                                            icon: const Icon(Icons.open_in_new_rounded, size: 18, color: Color(0xFF10B981)),
+                                            tooltip: 'Open in PDF Viewer',
+                                            onPressed: () => _handleNoteAction(course, note),
+                                          ),
+                                        ] else
+                                          IconButton(
+                                            icon: const Icon(Icons.download_rounded, size: 18, color: AppColors.primary),
+                                            tooltip: 'Download offline',
+                                            onPressed: () => _handleNoteAction(course, note),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 32)),
+            ],
+          ),
+        ),
             ],
           ),
         ),

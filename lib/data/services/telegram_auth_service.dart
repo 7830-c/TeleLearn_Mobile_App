@@ -883,6 +883,12 @@ class TelegramAuthService {
     return client;
   }
 
+  /// Expose cached auth key JSON for background isolate workers
+  static Future<Map<String, dynamic>?> getCachedAuthKeyJson(int dcId) async {
+    final key = await _loadCachedAuthKey(dcId);
+    return key?.toJson();
+  }
+
   static Future<tg.AuthorizationKey?> _loadCachedAuthKey(int dcId) async {
     if (_authKeysByDc.containsKey(dcId)) {
       return _authKeysByDc[dcId];

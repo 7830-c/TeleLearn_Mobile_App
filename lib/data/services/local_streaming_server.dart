@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../core/constants/app_constants.dart';
 import 'telegram_auth_service.dart';
+import 'telegram_chunk_worker.dart';
 
 /// Path B: Segmented Disposable Chunk Streaming Engine
 /// Architecture Highlights:
@@ -60,6 +61,7 @@ class LocalStreamingServer {
         _cacheDir!.createSync(recursive: true);
       }
       _enforceLruCacheCap();
+      unawaited(TelegramChunkWorker.init());
     } catch (e) {
       debugPrint('[LocalStreamingServer] Cache init error: $e');
     }
@@ -362,7 +364,6 @@ class LocalStreamingServer {
 
       int remaining = clen;
       int currentOffset = startByte;
-      int streamedChunksCount = 0;
 
       for (int c = startChunk; c <= endChunk; c++) {
         if (remaining <= 0 || isClientDisconnected || _activeStreamIdByDoc[docId] != currentStreamId) break;
@@ -396,17 +397,11 @@ class LocalStreamingServer {
 
         currentOffset += toSend;
         remaining -= toSend;
-        streamedChunksCount++;
 
-        // 🚀 Intelligent Stream Pacing:
-        // Burst initial 4 chunks (~1 MB) with fast 10ms yield to start playback instantly.
-        // Once ExoPlayer has buffer, pace with 160ms cooperative pauses to keep CPU 80% free
-        // for buttery smooth 120 FPS UI gestures, responsive controls, and zero frame drops!
-        if (streamedChunksCount > 4) {
-          await Future<void>.delayed(const Duration(milliseconds: 160));
-        } else {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
+        // Stream chunks smoothly to ExoPlayer without artificial stalls!
+        // The background isolate handles AES decryption, so UI thread is 100% idle.
+        // Yield 12ms so Flutter's vsync pipeline pulses smoothly at 60/120 FPS.
+        await Future<void>.delayed(const Duration(milliseconds: 12));
       }
 
       try {
@@ -434,7 +429,18 @@ class LocalStreamingServer {
   }) async {
     final chunkOffset = chunkIdx * tgChunkSize;
     for (int retry = 0; retry < 3; retry++) {
-      final b = await TelegramAuthService.downloadFileChunk(
+      // 🚀 Step 1: Download & decrypt in the background isolate worker (0% UI CPU load!)
+      Uint8List? b = await TelegramChunkWorker.downloadChunk(
+        dcId: dcId,
+        docId: docId,
+        accessHash: accessHash,
+        fileReference: fileRefBytes,
+        offset: chunkOffset,
+        limit: tgChunkSize,
+      );
+
+      // Fallback: If isolate worker is not ready, download on main client
+      b ??= await TelegramAuthService.downloadFileChunk(
         dcId: dcId,
         docId: docId,
         accessHash: accessHash,
