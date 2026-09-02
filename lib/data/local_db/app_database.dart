@@ -178,7 +178,14 @@ class AppDatabase {
     } else {
       results = await db.query('courses', where: 'user_phone = ?', whereArgs: [''], orderBy: 'last_accessed_at DESC, created_at DESC');
     }
-    return results.map((map) => CourseModel.fromMap(map)).toList();
+    // Deserialize in background isolate — jsonDecode of multi-MB course data
+    // blocks the main thread for 500ms+ per course, causing ANR on app startup
+    return compute(_coursesFromMaps, results);
+  }
+
+  /// Top-level function for compute() — runs jsonDecode for all courses off the main thread
+  static List<CourseModel> _coursesFromMaps(List<Map<String, dynamic>> maps) {
+    return maps.map((map) => CourseModel.fromMap(map)).toList();
   }
 
   Future<CourseModel?> getCourseById(String id) async {
@@ -191,11 +198,13 @@ class AppDatabase {
   }
 
   Future<void> insertCourse(CourseModel course, {String userPhone = ''}) async {
-    final db = await database;
-    final map = course.toMap();
+    // Pre-compute the heavy jsonEncode in a background isolate to avoid
+    // blocking the UI thread (courses with 500+ lessons produce multi-MB JSON strings)
+    final map = await compute(_courseToMap, course);
     if (userPhone.isNotEmpty) {
       map['user_phone'] = userPhone;
     }
+    final db = await database;
     await db.insert(
       'courses',
       map,
@@ -203,12 +212,18 @@ class AppDatabase {
     );
   }
 
+  /// Top-level function for compute() — runs course.toMap() (which includes jsonEncode)
+  /// in a background isolate so the main UI thread stays free for 60fps rendering.
+  static Map<String, dynamic> _courseToMap(CourseModel course) {
+    return course.toMap();
+  }
+
   Future<void> updateCourse(CourseModel course, {String userPhone = ''}) async {
-    final db = await database;
-    final map = course.toMap();
+    final map = await compute(_courseToMap, course);
     if (userPhone.isNotEmpty) {
       map['user_phone'] = userPhone;
     }
+    final db = await database;
     await db.update(
       'courses',
       map,

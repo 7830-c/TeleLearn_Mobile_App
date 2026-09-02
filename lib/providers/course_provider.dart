@@ -140,8 +140,18 @@ class CourseProvider extends ChangeNotifier {
           accessHash: channel.accessHash,
           channelName: channel.name,
         );
-        await AppDatabase.instance.insertCourse(newCourse, userPhone: phone);
-        await loadCourses(userPhone: phone);
+        
+        // Instant in-memory update avoids full SQLite read/jsonDecode freeze
+        final idx = _courses.indexWhere((c) => c.id == newCourse.id);
+        if (idx >= 0) {
+          _courses[idx] = newCourse;
+        } else {
+          _courses.insert(0, newCourse);
+        }
+        notifyListeners();
+
+        // Persist to SQLite in background
+        unawaited(AppDatabase.instance.insertCourse(newCourse, userPhone: phone));
         completer.complete(newCourse);
       } catch (e, st) {
         completer.completeError(e, st);
@@ -177,10 +187,18 @@ class CourseProvider extends ChangeNotifier {
           channelName: existing?.title,
         );
 
-        // Safe Guard: Only update SQLite if new sync returned real modules, or if existing is empty
+        // Safe Guard: Only update if new sync returned real modules, or if existing is empty
         if (updatedCourse.modules.isNotEmpty && updatedCourse.modules.any((m) => m.lessons.isNotEmpty || m.notes.isNotEmpty)) {
-          await AppDatabase.instance.insertCourse(updatedCourse, userPhone: phone);
-          await loadCourses(userPhone: phone);
+          final idx = _courses.indexWhere((c) => c.id == updatedCourse.id);
+          if (idx >= 0) {
+            _courses[idx] = updatedCourse;
+          } else {
+            _courses.insert(0, updatedCourse);
+          }
+          notifyListeners();
+
+          // Persist to SQLite in background
+          unawaited(AppDatabase.instance.insertCourse(updatedCourse, userPhone: phone));
           completer.complete(updatedCourse);
         } else {
           completer.complete(existing ?? updatedCourse);

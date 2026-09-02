@@ -56,6 +56,20 @@ class ProgressProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> loadMultipleCoursesProgress(List<String> courseIds, {String userPhone = ''}) async {
+    if (courseIds.isEmpty) return;
+    final phone = userPhone.isNotEmpty ? userPhone : _activeUserPhone;
+    try {
+      for (final cid in courseIds) {
+        final list = await AppDatabase.instance.getCourseProgress(cid, userPhone: phone);
+        _courseProgressMap[cid] = list;
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[ProgressProvider] Error loading multiple course progress: $e');
+    }
+  }
+
   List<LessonProgress> getCachedCourseProgress(String courseId) {
     return _courseProgressMap[courseId] ?? [];
   }
@@ -186,9 +200,8 @@ class ProgressProvider extends ChangeNotifier {
       currentList.add(updatedItem);
     }
     _courseProgressMap[courseId] = currentList;
-    notifyListeners();
 
-    // SQLite write only — no reload cascade
+    // Persist silently to SQLite without triggering UI rebuild cascades every 5s
     await AppDatabase.instance.saveLessonProgress(
       courseId: courseId,
       lessonId: lessonId,
@@ -198,13 +211,6 @@ class ProgressProvider extends ChangeNotifier {
       deltaSeconds: deltaSeconds,
       userPhone: phone,
     );
-
-    // Keep Continue Watching fresh for Dashboard without manual refresh
-    final cw = await AppDatabase.instance.getContinueWatching(userPhone: phone);
-    if (cw != null) {
-      _continueWatching = cw;
-      notifyListeners();
-    }
   }
 
   Future<void> toggleLessonCompleted({

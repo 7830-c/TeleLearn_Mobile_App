@@ -650,8 +650,9 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
                     final progressPct = progressProvider.getLessonProgressPercent(course.id, lesson.id, lesson.duration?.toInt() ?? 0);
                     final progressFrac = progressProvider.getLessonProgressFraction(course.id, lesson.id, lesson.duration?.toInt() ?? 0);
 
-                    return Container(
-                      decoration: BoxDecoration(
+                    return RepaintBoundary(
+                      child: Container(
+                        decoration: BoxDecoration(
                         color: isDark ? const Color(0xFF131D31) : Colors.white,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
@@ -906,7 +907,8 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
                           ),
                         ),
                       ),
-                    );
+                    ),
+                  );
                   },
                 ),
             ] else ...[

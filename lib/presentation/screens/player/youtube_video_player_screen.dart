@@ -352,10 +352,14 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       _isSeeking = false;
     }
     if (val.isBuffering != _isBuffering) {
-      final now = DateTime.now();
-      if (now.difference(_lastBufferUpdateTime).inMilliseconds > 250) {
-        _lastBufferUpdateTime = now;
-        setState(() => _isBuffering = val.isBuffering);
+      if (val.isPlaying && !_isBuffering) {
+        // Video is actively playing smoothly, ignore transient background buffer top-up
+      } else {
+        final now = DateTime.now();
+        if (now.difference(_lastBufferUpdateTime).inMilliseconds > 600) {
+          _lastBufferUpdateTime = now;
+          if (mounted) setState(() => _isBuffering = val.isBuffering);
+        }
       }
     }
 
@@ -1871,143 +1875,147 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         ),
                         const SizedBox(height: 12),
 
-                        // Playlist Lessons List (Column layout eliminates nested scrollable double-measurement pass)
-                        Column(
-                          children: [
-                            for (int idx = 0; idx < (currentModule?.lessons.length ?? 0); idx++) ...[
-                              Builder(
-                                builder: (_) {
-                                  final l = currentModule!.lessons[idx];
-                                  final isCurrent = l.id == _currentLessonId;
-                                  final isDone = progressProvider.isLessonCompleted(_currentCourseId, l.id);
-                                  final isLastWatched = progressProvider.continueWatching?.lessonId == l.id;
-                                  final progressPct = progressProvider.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
-                                  final progressFrac = progressProvider.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
+                        // Playlist Lessons List
+                        RepaintBoundary(
+                          child: Column(
+                            children: [
+                              for (int idx = 0; idx < (currentModule?.lessons.length ?? 0); idx++) ...[
+                                Builder(
+                                  builder: (_) {
+                                    final l = currentModule!.lessons[idx];
+                                    final isCurrent = l.id == _currentLessonId;
+                                    final isDone = progressProvider.isLessonCompleted(_currentCourseId, l.id);
+                                    final isLastWatched = progressProvider.continueWatching?.lessonId == l.id;
+                                    final progressPct = progressProvider.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
+                                    final progressFrac = progressProvider.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
 
-                                  return Container(
-                                    decoration: BoxDecoration(
-                                      color: isCurrent
-                                          ? (isDark ? AppColors.primary.withValues(alpha: 0.18) : AppColors.primaryLight.withValues(alpha: 0.6))
-                                          : (isDark ? const Color(0xFF131D31) : Colors.white),
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: isCurrent
-                                            ? AppColors.primary
-                                            : (isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0)),
-                                      ),
-                                    ),
-                                    child: ListTile(
-                                      dense: true,
-                                      onTap: () => _switchLesson(l.id),
-                                      leading: Container(
-                                        width: 30,
-                                        height: 30,
+                                    return RepaintBoundary(
+                                      child: Container(
                                         decoration: BoxDecoration(
                                           color: isCurrent
-                                              ? AppColors.primary
-                                              : (isDone
-                                                  ? const Color(0xFF059669).withValues(alpha: 0.15)
-                                                  : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))),
-                                          borderRadius: BorderRadius.circular(8),
+                                              ? (isDark ? AppColors.primary.withValues(alpha: 0.18) : AppColors.primaryLight.withValues(alpha: 0.6))
+                                              : (isDark ? const Color(0xFF131D31) : Colors.white),
+                                          borderRadius: BorderRadius.circular(14),
+                                          border: Border.all(
+                                            color: isCurrent
+                                                ? AppColors.primary
+                                                : (isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0)),
+                                          ),
                                         ),
-                                        child: Center(
-                                          child: isDone
-                                              ? const Icon(Icons.check_rounded, size: 16, color: Color(0xFF059669))
-                                              : Text(
-                                                  '${idx + 1}',
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: isCurrent ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
-                                                  ),
-                                                ),
-                                        ),
-                                      ),
-                                      title: Text(
-                                        l.title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: GoogleFonts.inter(
-                                          fontSize: 13,
-                                          fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
-                                          color: isCurrent
-                                              ? AppColors.primary
-                                              : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                        ),
-                                      ),
-                                      subtitle: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const SizedBox(height: 2),
-                                          Row(
+                                        child: ListTile(
+                                          dense: true,
+                                          onTap: () => _switchLesson(l.id),
+                                          leading: Container(
+                                            width: 30,
+                                            height: 30,
+                                            decoration: BoxDecoration(
+                                              color: isCurrent
+                                                  ? AppColors.primary
+                                                  : (isDone
+                                                      ? const Color(0xFF059669).withValues(alpha: 0.15)
+                                                      : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))),
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: Center(
+                                              child: isDone
+                                                  ? const Icon(Icons.check_rounded, size: 16, color: Color(0xFF059669))
+                                                  : Text(
+                                                      '${idx + 1}',
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        fontWeight: FontWeight.w700,
+                                                        color: isCurrent ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
+                                                      ),
+                                                    ),
+                                            ),
+                                          ),
+                                          title: Text(
+                                            l.title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.inter(
+                                              fontSize: 13,
+                                              fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                                              color: isCurrent
+                                                  ? AppColors.primary
+                                                  : (isDark ? Colors.white : const Color(0xFF0F172A)),
+                                            ),
+                                          ),
+                                          subtitle: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Text(
-                                                DurationFormatter.formatTimestamp(l.duration?.toInt() ?? 0),
-                                                style: GoogleFonts.inter(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                              ),
-                                              if (isDone) ...[
-                                                const SizedBox(width: 6),
-                                                Text(
-                                                  '• Finished',
-                                                  style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF059669)),
-                                                ),
-                                              ] else if (progressPct > 0) ...[
-                                                const SizedBox(width: 6),
-                                                Text(
-                                                  '• $progressPct% watched',
-                                                  style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.primary),
-                                                ),
-                                              ],
-                                              if (isLastWatched && !isCurrent) ...[
-                                                const SizedBox(width: 8),
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                                  decoration: BoxDecoration(
-                                                    color: AppColors.primary.withValues(alpha: 0.15),
-                                                    borderRadius: BorderRadius.circular(4),
+                                              const SizedBox(height: 2),
+                                              Row(
+                                                children: [
+                                                  Text(
+                                                    DurationFormatter.formatTimestamp(l.duration?.toInt() ?? 0),
+                                                    style: GoogleFonts.inter(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
                                                   ),
-                                                  child: const Text(
-                                                    '▶ Resume',
-                                                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.primary),
+                                                  if (isDone) ...[
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      '• Finished',
+                                                      style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF059669)),
+                                                    ),
+                                                  ] else if (progressPct > 0) ...[
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      '• $progressPct% watched',
+                                                      style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.primary),
+                                                    ),
+                                                  ],
+                                                  if (isLastWatched && !isCurrent) ...[
+                                                    const SizedBox(width: 8),
+                                                    Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                                      decoration: BoxDecoration(
+                                                        color: AppColors.primary.withValues(alpha: 0.15),
+                                                        borderRadius: BorderRadius.circular(4),
+                                                      ),
+                                                      child: const Text(
+                                                        '▶ Resume',
+                                                        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.primary),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                              if (!isDone && progressFrac > 0) ...[
+                                                const SizedBox(height: 4),
+                                                ClipRRect(
+                                                  borderRadius: BorderRadius.circular(2),
+                                                  child: LinearProgressIndicator(
+                                                    value: progressFrac,
+                                                    minHeight: 2.5,
+                                                    backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
                                                   ),
                                                 ),
                                               ],
                                             ],
                                           ),
-                                          if (!isDone && progressFrac > 0) ...[
-                                            const SizedBox(height: 4),
-                                            ClipRRect(
-                                              borderRadius: BorderRadius.circular(2),
-                                              child: LinearProgressIndicator(
-                                                value: progressFrac,
-                                                minHeight: 2.5,
-                                                backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                                valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                                              ),
-                                            ),
-                                          ],
-                                        ],
+                                          trailing: isCurrent
+                                              ? Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                  decoration: BoxDecoration(
+                                                    color: AppColors.primary,
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: const Text(
+                                                    'PLAYING',
+                                                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white),
+                                                  ),
+                                                )
+                                              : null,
+                                        ),
                                       ),
-                                      trailing: isCurrent
-                                          ? Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: AppColors.primary,
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
-                                              child: const Text(
-                                                'PLAYING',
-                                                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white),
-                                              ),
-                                            )
-                                          : null,
-                                    ),
-                                  );
-                                },
-                              ),
-                              if (idx < (currentModule?.lessons.length ?? 0) - 1) const SizedBox(height: 8),
+                                    );
+                                  },
+                                ),
+                                if (idx < (currentModule?.lessons.length ?? 0) - 1) const SizedBox(height: 8),
+                              ],
                             ],
-                          ],
+                          ),
                         ),
                       ] else ...[
                         // Tab 2: Lesson Notes

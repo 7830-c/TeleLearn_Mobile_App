@@ -660,6 +660,118 @@ class TelegramAuthService {
     return null;
   }
 
+  /// 🚀 Download file chunk in a BACKGROUND ISOLATE — zero UI thread blocking!
+  /// Creates a disposable MTProto connection inside Isolate.run(), performs the
+  /// entire AES-IGE encrypted download off the main thread, and returns raw bytes.
+  /// This is the critical fix: MTProto AES-IGE decryption of 256KB chunks takes
+  /// 200-500ms of synchronous CPU time. Running it on the main isolate blocks
+  /// Flutter's rendering pipeline, causing video frame drops and ANR dialogs.
+  static Future<Uint8List?> downloadFileChunkInIsolate({
+    required int dcId,
+    required int docId,
+    required int accessHash,
+    required Uint8List fileReference,
+    required int offset,
+    required int limit,
+  }) async {
+    final masterDc = await getMasterDcId();
+    final cachedDocDc = _docDcMap[docId];
+    final targetDc = (cachedDocDc != null && cachedDocDc >= 1 && cachedDocDc <= 5)
+        ? cachedDocDc
+        : ((dcId >= 1 && dcId <= 5) ? dcId : masterDc);
+
+    // Get auth key for this DC (must exist — we already authorized during first playback)
+    tg.AuthorizationKey? authKey = await _loadCachedAuthKey(targetDc);
+    if (authKey == null) {
+      // Fallback: authorize on main thread first (one-time), then retry in isolate
+      debugPrint('[TelegramAuthService] No cached auth key for DC $targetDc, falling back to main-thread download');
+      return downloadFileChunk(
+        dcId: targetDc, docId: docId, accessHash: accessHash,
+        fileReference: fileReference, offset: offset, limit: limit,
+      );
+    }
+
+    // Serialize auth key to pass into isolate (isolates can't share heap objects)
+    final authKeyJson = authKey.toJson();
+
+    // Get DC IP for direct connection inside the isolate
+    final dcOption = _dcOptions[targetDc] ?? _dcOptions[2]!;
+    final candidateIps = _dcIps[targetDc] ?? [dcOption.ipAddress];
+    final connectIp = candidateIps.first;
+    const connectPort = 443;
+
+    // Copy fileReference to a plain List<int> for isolate serialization
+    final fileRefList = List<int>.from(fileReference);
+
+    try {
+      final result = await Isolate.run<List<int>?>(() async {
+        // --- Everything below runs in a BACKGROUND ISOLATE ---
+        // No Flutter UI thread blocking whatsoever!
+
+        final rawSocket = await Socket.connect(connectIp, connectPort,
+            timeout: const Duration(seconds: 8));
+        final socket = _IoSocket(rawSocket);
+
+        final obfuscation = tg.Obfuscation.random(false, targetDc);
+        final idGenerator = tg.MessageIdGenerator();
+        await socket.send(obfuscation.preamble);
+
+        final ak = tg.AuthorizationKey.fromJson(authKeyJson);
+        final client = tg.Client(
+          socket: socket,
+          obfuscation: obfuscation,
+          authorizationKey: ak,
+          idGenerator: idGenerator,
+        );
+
+        try {
+          final location = t.InputDocumentFileLocation(
+            id: docId,
+            accessHash: accessHash,
+            fileReference: Uint8List.fromList(fileRefList),
+            thumbSize: '',
+          );
+
+          final res = await client.upload.getFile(
+            precise: true,
+            cdnSupported: false,
+            location: location,
+            offset: offset,
+            limit: limit,
+          ).timeout(const Duration(seconds: 25));
+
+          if (res.result is t.UploadFile) {
+            final uploadFile = res.result as t.UploadFile;
+            return uploadFile.bytes;
+          }
+
+          // Return null on error (migration/auth errors handled below on main thread)
+          return null;
+        } finally {
+          socket.destroy();
+        }
+      }).timeout(const Duration(seconds: 30));
+
+      if (result != null && result.isNotEmpty) {
+        return Uint8List.fromList(result);
+      }
+
+      // If isolate download returned null, fall back to main-thread download
+      // (handles DC migration, auth re-export, etc.)
+      debugPrint('[TelegramAuthService] Isolate download returned null for doc $docId, falling back to main-thread');
+      return downloadFileChunk(
+        dcId: targetDc, docId: docId, accessHash: accessHash,
+        fileReference: fileReference, offset: offset, limit: limit,
+      );
+    } catch (e) {
+      debugPrint('[TelegramAuthService] Isolate download error: $e, falling back to main-thread');
+      return downloadFileChunk(
+        dcId: targetDc, docId: docId, accessHash: accessHash,
+        fileReference: fileReference, offset: offset, limit: limit,
+      );
+    }
+  }
+
   /// Establish or retrieve existing MTProto client connection to specified DC
   static Future<tg.Client> getClient({int? dcId, bool forceNew = false}) async {
     final masterDc = await getMasterDcId();

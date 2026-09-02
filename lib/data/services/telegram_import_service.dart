@@ -263,13 +263,15 @@ class TelegramImportService {
         debugPrint('[TelegramImportService] getForumTopics exception: $e');
       }
 
-      final List<t.MessageBase> allRawMessages = [];
+      final List<_ParsedMediaItem> parsedItems = [];
+      final Map<int, int> messageToTopicMap = {};
       int offsetId = 0;
-      const int batchLimit = 100;
-      const int maxMessagesToFetch = 4000;
+      const int batchLimit = 50;
+      const int maxMessagesToFetch = 1000;
+      int totalFetchedCount = 0;
 
-      // 2. Fetch message history with non-blocking streaming
-      while (allRawMessages.length < maxMessagesToFetch) {
+      // 2. Fetch message history with non-blocking streaming and immediate memory release
+      while (totalFetchedCount < maxMessagesToFetch) {
         final historyRes = await client.messages.getHistory(
           peer: peer,
           offsetId: offsetId,
@@ -308,10 +310,10 @@ class TelegramImportService {
         }
 
         if (batch.isEmpty) break;
-        allRawMessages.addAll(batch);
-        debugPrint('[TelegramImportService] 📥 History batch: +${batch.length} messages (Total: ${allRawMessages.length}${totalChannelCount != null ? ' / $totalChannelCount' : ''})');
+        totalFetchedCount += batch.length;
+        debugPrint('[TelegramImportService] 📥 History batch: +${batch.length} messages (Total processed: $totalFetchedCount${totalChannelCount != null ? ' / $totalChannelCount' : ''})');
 
-        // Discover Topic Creation/Edit actions inside message history
+        // Extract media & topics immediately and drop raw MTProto message objects to free memory
         for (final m in batch) {
           if (m is t.MessageService) {
             if (m.action is t.MessageActionTopicCreate) {
@@ -325,13 +327,85 @@ class TelegramImportService {
                 topicsMap[m.id] = act.title!.trim();
               }
             }
+          } else if (m is t.Message) {
+            int topicId = 0;
+            if (m.replyTo is t.MessageReplyHeader) {
+              final replyHeader = m.replyTo as t.MessageReplyHeader;
+              if (replyHeader.replyToTopId != null && replyHeader.replyToTopId! > 0) {
+                topicId = replyHeader.replyToTopId!;
+              } else if (replyHeader.forumTopic && replyHeader.replyToMsgId != null && replyHeader.replyToMsgId! > 0) {
+                topicId = replyHeader.replyToMsgId!;
+              } else if (replyHeader.replyToMsgId != null && messageToTopicMap.containsKey(replyHeader.replyToMsgId)) {
+                topicId = messageToTopicMap[replyHeader.replyToMsgId]!;
+              } else if (replyHeader.replyToMsgId != null && topicsMap.containsKey(replyHeader.replyToMsgId)) {
+                topicId = replyHeader.replyToMsgId!;
+              }
+            }
+            messageToTopicMap[m.id] = topicId;
+
+            final media = m.media;
+            if (media is t.MessageMediaDocument && media.document is t.Document) {
+              final doc = media.document as t.Document;
+              final mime = doc.mimeType.toLowerCase();
+
+              String? fileName;
+              num duration = 0;
+              bool isVideo = false;
+
+              for (final attr in doc.attributes) {
+                if (attr is t.DocumentAttributeFilename) {
+                  fileName = attr.fileName;
+                } else if (attr is t.DocumentAttributeVideo) {
+                  isVideo = true;
+                  duration = attr.duration;
+                }
+              }
+
+              if (mime.startsWith('video/') ||
+                  mime == 'application/octet-stream' ||
+                  mime == 'video/x-matroska') {
+                if (fileName != null && (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.mov') || fileName.endsWith('.webm') || fileName.endsWith('.avi'))) {
+                  isVideo = true;
+                }
+              }
+
+              if (fileName == null || fileName.trim().isEmpty) {
+                final firstLine = m.message.trim().split('\n').first;
+                fileName = firstLine.isNotEmpty ? (firstLine.length > 80 ? '${firstLine.substring(0, 77)}...' : firstLine) : (isVideo ? 'Lesson ${m.id}' : 'Note ${m.id}');
+              }
+
+              final cleanName = _cleanTitle(fileName);
+              final fileRefHex = _bytesToHex(doc.fileReference);
+              final streamUrl = 'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${doc.dcId}&doc_id=${doc.id}&access_hash=${doc.accessHash}&size=${doc.size}&mime=${Uri.encodeComponent(doc.mimeType)}&file_ref=$fileRefHex';
+
+              parsedItems.add(_ParsedMediaItem(
+                id: m.id,
+                topicId: topicId,
+                title: cleanName,
+                fileName: fileName,
+                streamUrl: streamUrl,
+                duration: duration > 0 ? duration : (doc.size ~/ (128 * 1024)),
+                size: doc.size,
+                isVideo: isVideo,
+                text: m.message.trim(),
+              ));
+            } else if (media is t.MessageMediaPhoto) {
+              final firstLine = m.message.trim().split('\n').first;
+              final photoTitle = firstLine.isNotEmpty ? _cleanTitle(firstLine) : 'Photo Note ${m.id}';
+              parsedItems.add(_ParsedMediaItem(
+                id: m.id,
+                topicId: topicId,
+                title: photoTitle,
+                fileName: '$photoTitle.jpg',
+                streamUrl: '',
+                duration: 0,
+                size: 0,
+                isVideo: false,
+                text: m.message.trim(),
+              ));
+            }
           }
         }
-
-        // Yield to Flutter main thread so UI animations remain smooth and prevent Android ANR
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-
-        if (batch.length < batchLimit) break;
 
         int minId = 0x7FFFFFFF;
         for (final m in batch) {
@@ -346,45 +420,35 @@ class TelegramImportService {
           if (mId != null && mId < minId) minId = mId;
         }
 
+        // Release batch references immediately for Garbage Collection
+        batch.clear();
+
+        // Yield 150ms to Flutter main thread — gives 9 full frames at 60 FPS for smooth loader animation
+        // and prevents Android ANR (which triggers at 5s of main thread blocking)
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+
+        if (totalFetchedCount >= (totalChannelCount ?? maxMessagesToFetch)) break;
+
         if (minId == 0x7FFFFFFF || (minId >= offsetId && offsetId != 0)) {
           break;
         }
         offsetId = minId;
       }
 
-      // Sort messages in chronological order (oldest to newest)
-      final messages = allRawMessages.whereType<t.Message>().toList();
-      messages.sort((a, b) => a.id.compareTo(b.id));
+      // Sort parsed items in chronological order (oldest to newest)
+      parsedItems.sort((a, b) => a.id.compareTo(b.id));
 
-      // 3. Map messages into modules by topic ID and message reply inheritance
-      final Map<int, int> messageToTopicMap = {};
+      // 3. Map parsed items into modules by topic ID
       final Map<int, Map<String, dynamic>> modulesDict = {};
 
-      for (int i = 0; i < messages.length; i++) {
+      for (int i = 0; i < parsedItems.length; i++) {
         if (i % 60 == 0) {
-          // Yield to UI isolate every 60 items
-          await Future<void>.delayed(Duration.zero);
+          await Future<void>.delayed(const Duration(milliseconds: 5));
         }
-        final msg = messages[i];
-        if (msg.media == null) continue;
-
-        int topicId = 0;
-        if (msg.replyTo is t.MessageReplyHeader) {
-          final replyHeader = msg.replyTo as t.MessageReplyHeader;
-          if (replyHeader.replyToTopId != null && replyHeader.replyToTopId! > 0) {
-            topicId = replyHeader.replyToTopId!;
-          } else if (replyHeader.forumTopic && replyHeader.replyToMsgId != null && replyHeader.replyToMsgId! > 0) {
-            topicId = replyHeader.replyToMsgId!;
-          } else if (replyHeader.replyToMsgId != null && messageToTopicMap.containsKey(replyHeader.replyToMsgId)) {
-            topicId = messageToTopicMap[replyHeader.replyToMsgId]!;
-          } else if (replyHeader.replyToMsgId != null && topicsMap.containsKey(replyHeader.replyToMsgId)) {
-            topicId = replyHeader.replyToMsgId!;
-          }
-        }
-
-        messageToTopicMap[msg.id] = topicId;
-
+        final item = parsedItems[i];
+        final topicId = item.topicId;
         final topicTitle = topicsMap[topicId] ?? (topicId == 0 ? 'General' : 'Topic #$topicId');
+
         if (!modulesDict.containsKey(topicId)) {
           modulesDict[topicId] = {
             'id': topicId,
@@ -396,74 +460,23 @@ class TelegramImportService {
           modulesDict[topicId]!['title'] = topicsMap[topicId]!;
         }
 
-        final media = msg.media;
-        if (media is t.MessageMediaDocument && media.document is t.Document) {
-          final doc = media.document as t.Document;
-          final mime = doc.mimeType.toLowerCase();
-
-          String? fileName;
-          num duration = 0;
-          bool isVideo = false;
-
-          for (final attr in doc.attributes) {
-            if (attr is t.DocumentAttributeFilename) {
-              fileName = attr.fileName;
-            } else if (attr is t.DocumentAttributeVideo) {
-              isVideo = true;
-              duration = attr.duration;
-            }
-          }
-
-          if (mime.startsWith('video/') ||
-              mime == 'application/octet-stream' ||
-              mime == 'video/x-matroska') {
-            if (fileName != null && (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.mov') || fileName.endsWith('.webm') || fileName.endsWith('.avi'))) {
-              isVideo = true;
-            }
-          }
-
-          if (fileName == null || fileName.trim().isEmpty) {
-            final firstLine = msg.message.trim().split('\n').first;
-            fileName = firstLine.isNotEmpty ? (firstLine.length > 80 ? '${firstLine.substring(0, 77)}...' : firstLine) : (isVideo ? 'Lesson ${msg.id}' : 'Note ${msg.id}');
-          }
-
-          final cleanName = _cleanTitle(fileName);
-
-          if (isVideo) {
-            final fileRefHex = _bytesToHex(doc.fileReference);
-            final streamUrl = 'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${doc.dcId}&doc_id=${doc.id}&access_hash=${doc.accessHash}&size=${doc.size}&mime=${Uri.encodeComponent(doc.mimeType)}&file_ref=$fileRefHex';
-
-            final lesson = CourseLesson(
-              id: msg.id,
-              title: cleanName,
-              duration: duration > 0 ? duration : (doc.size ~/ (128 * 1024)),
-              size: doc.size,
-              videoUrl: streamUrl,
-            );
-            (modulesDict[topicId]!['lessons'] as List<CourseLesson>).add(lesson);
-          } else {
-            final fileRefHex = _bytesToHex(doc.fileReference);
-            final streamUrl = 'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${doc.dcId}&doc_id=${doc.id}&access_hash=${doc.accessHash}&size=${doc.size}&mime=${Uri.encodeComponent(doc.mimeType)}&file_ref=$fileRefHex';
-
-            final note = CourseNote(
-              id: msg.id,
-              title: cleanName,
-              fileName: fileName,
-              fileUrl: streamUrl,
-              size: doc.size,
-              text: msg.message.trim().isNotEmpty ? msg.message.trim() : 'Reference document from Telegram channel',
-            );
-            (modulesDict[topicId]!['notes'] as List<CourseNote>).add(note);
-          }
-        } else if (media is t.MessageMediaPhoto) {
-          final firstLine = msg.message.trim().split('\n').first;
-          final photoTitle = firstLine.isNotEmpty ? _cleanTitle(firstLine) : 'Photo Note ${msg.id}';
+        if (item.isVideo) {
+          final lesson = CourseLesson(
+            id: item.id,
+            title: item.title,
+            duration: item.duration,
+            size: item.size,
+            videoUrl: item.streamUrl,
+          );
+          (modulesDict[topicId]!['lessons'] as List<CourseLesson>).add(lesson);
+        } else {
           final note = CourseNote(
-            id: msg.id,
-            title: photoTitle,
-            fileName: '$photoTitle.jpg',
-            size: 0,
-            text: msg.message.trim(),
+            id: item.id,
+            title: item.title,
+            fileName: item.fileName,
+            fileUrl: item.streamUrl,
+            size: item.size,
+            text: item.text.isNotEmpty ? item.text : 'Reference document from Telegram channel',
           );
           (modulesDict[topicId]!['notes'] as List<CourseNote>).add(note);
         }
@@ -554,5 +567,29 @@ class TelegramImportService {
   static String _bytesToHex(List<int> bytes) {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
+}
+
+class _ParsedMediaItem {
+  final int id;
+  final int topicId;
+  final String title;
+  final String? fileName;
+  final String streamUrl;
+  final num duration;
+  final int size;
+  final bool isVideo;
+  final String text;
+
+  _ParsedMediaItem({
+    required this.id,
+    required this.topicId,
+    required this.title,
+    this.fileName,
+    required this.streamUrl,
+    required this.duration,
+    required this.size,
+    required this.isVideo,
+    required this.text,
+  });
 }
 

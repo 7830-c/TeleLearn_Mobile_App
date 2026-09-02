@@ -24,9 +24,11 @@ class LocalStreamingServer {
   Directory? _cacheDir;
   static const int _maxCacheBytes = 300 * 1024 * 1024; // 300 MB disposable cap
   static const int _chunkSizeBytes = 2 * 1024 * 1024; // 2 MB chunk block
+  static int _activeStreamSession = 0;
 
-  /// Flush transient in-memory buffers when transitioning streams
+  /// Flush transient in-memory buffers when transitioning streams and cancel active loops
   static void abortPreviousStreams() {
+    _activeStreamSession++;
     _inFlightChunkFutures.clear();
   }
 
@@ -335,34 +337,21 @@ class LocalStreamingServer {
       }
 
       // Only prefetch if continuous playback stream (> 128KB requested), avoiding network flooding on small metadata probes
-      final bool isContinuousStream = clen > 128 * 1024;
-
-      void triggerPrefetch(int nextChunkIdx) {
-        if (!isContinuousStream || nextChunkIdx > endChunk) return;
-        // Prefetch 1 lookahead chunk ahead to keep memory light and avoid CPU isolate starvation
-        final nextKey = '${docId}_$nextChunkIdx';
-        if (_memChunkCache.containsKey(nextKey) || _inFlightChunkFutures.containsKey(nextKey)) return;
-        unawaited(fetchChunk(nextChunkIdx));
-      }
-
       bool isClientDisconnected = false;
       clientRes.done.catchError((_) {
         isClientDisconnected = true;
       });
 
+      final currentSession = _activeStreamSession;
       int remaining = clen;
       int currentOffset = startByte;
+      int streamedChunksCount = 0;
 
       for (int c = startChunk; c <= endChunk; c++) {
-        if (remaining <= 0 || isClientDisconnected) break;
-
-        // Pipeline upcoming chunk in background
-        if (isContinuousStream && c + 1 <= endChunk && !isClientDisconnected) {
-          triggerPrefetch(c + 1);
-        }
+        if (remaining <= 0 || isClientDisconnected || currentSession != _activeStreamSession) break;
 
         final chunkBytes = await fetchChunk(c);
-        if (isClientDisconnected || chunkBytes == null || chunkBytes.isEmpty) {
+        if (isClientDisconnected || currentSession != _activeStreamSession || chunkBytes == null || chunkBytes.isEmpty) {
           break;
         }
 
@@ -390,6 +379,13 @@ class LocalStreamingServer {
 
         currentOffset += toSend;
         remaining -= toSend;
+        streamedChunksCount++;
+
+        // Cooperative yield: since chunk downloads now run in background isolates,
+        // we only need minimal yields for event loop health (not for UI frame budget).
+        if (streamedChunksCount >= 4) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
       }
 
       try {
@@ -415,7 +411,7 @@ class LocalStreamingServer {
   }) async {
     final chunkOffset = chunkIdx * tgChunkSize;
     for (int retry = 0; retry < 3; retry++) {
-      final b = await TelegramAuthService.downloadFileChunk(
+      final b = await TelegramAuthService.downloadFileChunkInIsolate(
         dcId: dcId,
         docId: docId,
         accessHash: accessHash,
@@ -426,9 +422,6 @@ class LocalStreamingServer {
 
       if (b != null && b.isNotEmpty) {
         _putMemChunk(cacheKey, b);
-        if (chunkFile != null) {
-          unawaited(chunkFile.writeAsBytes(b, flush: false).catchError((_) => chunkFile));
-        }
         return b;
       }
       if (retry < 2) {

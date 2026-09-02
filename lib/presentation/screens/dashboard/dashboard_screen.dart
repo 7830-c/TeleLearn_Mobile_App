@@ -61,8 +61,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context.read<DownloadProvider>().loadDownloads(authPhone),
     ]);
 
-    for (final c in courseProvider.courses) {
-      await progressProvider.loadCourseProgress(c.id, userPhone: authPhone);
+    final courseIds = courseProvider.courses.map((c) => c.id).toList();
+    if (courseIds.isNotEmpty) {
+      await progressProvider.loadMultipleCoursesProgress(courseIds, userPhone: authPhone);
     }
 
     if (mounted) {
