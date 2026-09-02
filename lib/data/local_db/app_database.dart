@@ -269,57 +269,59 @@ class AppDatabase {
 
     final bool completed = isCompleted ?? (durationSeconds > 0 && (progressSeconds / durationSeconds >= 0.90));
 
-    await db.insert(
-      'progress',
-      {
-        'user_phone': userPhone,
-        'course_id': courseId,
-        'lesson_id': lessonId,
-        'progress_seconds': progressSeconds,
-        'duration_seconds': durationSeconds,
-        'is_completed': completed ? 1 : 0,
-        'last_watched_at': now.toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-
-    // Update last_accessed_at on course
-    await db.update(
-      'courses',
-      {'last_accessed_at': now.toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [courseId],
-    );
-
-    // Add study time to study_logs if delta > 0
-    if (deltaSeconds > 0) {
-      final dateStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-      final existing = await db.query(
-        'study_logs',
-        where: 'date = ? AND user_phone = ?',
-        whereArgs: [dateStr, userPhone],
+    await db.transaction((txn) async {
+      await txn.insert(
+        'progress',
+        {
+          'user_phone': userPhone,
+          'course_id': courseId,
+          'lesson_id': lessonId,
+          'progress_seconds': progressSeconds,
+          'duration_seconds': durationSeconds,
+          'is_completed': completed ? 1 : 0,
+          'last_watched_at': now.toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
       );
 
-      if (existing.isNotEmpty) {
-        final currentSec = existing.first['seconds_studied'] as int? ?? 0;
-        await db.update(
+      // Update last_accessed_at on course
+      await txn.update(
+        'courses',
+        {'last_accessed_at': now.toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [courseId],
+      );
+
+      // Add study time to study_logs if delta > 0
+      if (deltaSeconds > 0) {
+        final dateStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+        final existing = await txn.query(
           'study_logs',
-          {'seconds_studied': currentSec + deltaSeconds},
-          where: 'id = ?',
-          whereArgs: [existing.first['id']],
+          where: 'date = ? AND user_phone = ?',
+          whereArgs: [dateStr, userPhone],
         );
-      } else {
-        await db.insert(
-          'study_logs',
-          {
-            'user_phone': userPhone,
-            'date': dateStr,
-            'seconds_studied': deltaSeconds,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+
+        if (existing.isNotEmpty) {
+          final currentSec = existing.first['seconds_studied'] as int? ?? 0;
+          await txn.update(
+            'study_logs',
+            {'seconds_studied': currentSec + deltaSeconds},
+            where: 'id = ?',
+            whereArgs: [existing.first['id']],
+          );
+        } else {
+          await txn.insert(
+            'study_logs',
+            {
+              'user_phone': userPhone,
+              'date': dateStr,
+              'seconds_studied': deltaSeconds,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
       }
-    }
+    });
   }
 
   Future<List<LessonProgress>> getCourseProgress(String courseId, {String userPhone = ''}) async {

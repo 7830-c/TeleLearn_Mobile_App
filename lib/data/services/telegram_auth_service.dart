@@ -30,57 +30,73 @@ class TelegramAuthResult {
 }
 
 class _IoSocket extends tg.SocketAbstraction {
-  _IoSocket(this._rawSocket) {
+  _IoSocket(this._rawSocket, {this.onDisconnected}) {
     _rawSocket.listen(
       (data) {
-        if (!_controller.isClosed) {
+        if (!_isDestroyed && !_controller.isClosed) {
           _controller.add(data);
         }
       },
-      onError: (e, st) {
+      onError: (e) {
         debugPrint('[TelegramAuthService Socket notice]: $e');
-        if (!_controller.isClosed) {
-          _controller.addError(e, st);
-        }
+        destroy();
+        onDisconnected?.call();
       },
       onDone: () {
-        if (!_controller.isClosed) {
-          _controller.close();
-        }
+        destroy();
+        onDisconnected?.call();
       },
-      cancelOnError: false,
+      cancelOnError: true,
     );
   }
 
   final Socket _rawSocket;
+  final VoidCallback? onDisconnected;
   final StreamController<Uint8List> _controller = StreamController<Uint8List>.broadcast();
   Future<void> _lastSendFuture = Future.value();
+  bool _isDestroyed = false;
+
+  bool get isAlive => !_isDestroyed;
 
   @override
   Stream<Uint8List> get receiver => _controller.stream;
 
   @override
   Future<void> send(List<int> data) {
+    if (_isDestroyed) {
+      return Future.error(const SocketException('Socket is closed'));
+    }
     final completer = Completer<void>();
     _lastSendFuture = _lastSendFuture.then((_) async {
       try {
+        if (_isDestroyed) {
+          throw const SocketException('Socket is closed');
+        }
         _rawSocket.add(data);
         await _rawSocket.flush();
         completer.complete();
       } catch (e, st) {
+        destroy();
+        onDisconnected?.call();
         completer.completeError(e, st);
       }
     }).catchError((e, st) {
+      destroy();
+      onDisconnected?.call();
       completer.completeError(e, st);
     });
     return completer.future;
   }
 
   void destroy() {
+    if (_isDestroyed) return;
+    _isDestroyed = true;
     try {
       if (!_controller.isClosed) {
         _controller.close();
       }
+    } catch (_) {}
+    try {
       _rawSocket.destroy();
     } catch (_) {}
   }
@@ -173,16 +189,8 @@ class TelegramAuthService {
   };
 
 
-  /// Determine the best initial Telegram DC based on country code or saved session
-  static Future<int> getBestInitialDc(String phone) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedDc = prefs.getInt('tg_last_dc');
-      if (savedDc != null && savedDc >= 1 && savedDc <= 5) {
-        return savedDc;
-      }
-    } catch (_) {}
-
+  /// Determine the best initial Telegram DC based on country code
+  static int getBestInitialDc(String phone) {
     final clean = _normalizePhone(phone);
     // Asia / India / Southeast Asia -> DC 5 (Singapore)
     if (clean.startsWith('+91') ||
@@ -213,7 +221,7 @@ class TelegramAuthService {
       return 1;
     }
 
-    // Europe & Middle East default -> DC 2 / 4 (Amsterdam)
+    // Europe & Middle East default -> DC 2
     return 2;
   }
 
@@ -228,7 +236,7 @@ class TelegramAuthService {
     }
 
     try {
-      final initialDc = await getBestInitialDc(cleanPhone);
+      final initialDc = getBestInitialDc(cleanPhone);
       _currentDcId = initialDc;
       debugPrint('[TelegramAuthService] Initiating direct Telegram MTProto session for $cleanPhone on DC $_currentDcId (api_id: $apiId)');
 
@@ -567,12 +575,27 @@ class TelegramAuthService {
   static bool _dcLoadedFromPrefs = false;
 
   static Future<int> getMasterDcId() async {
-    if (_dcLoadedFromPrefs) return _currentDcId;
+    if (_dcLoadedFromPrefs && _currentDcId != 0 && _currentDcId != 4) return _currentDcId;
     try {
       final prefs = await SharedPreferences.getInstance();
+      final phone = prefs.getString(AppConstants.keyUserPhone) ?? '';
       final savedDc = prefs.getInt('tg_last_dc');
-      if (savedDc != null && savedDc >= 1 && savedDc <= 5) {
+
+      debugPrint('[TelegramAuthService] 🔍 getMasterDcId check: phone=$phone, savedDc=$savedDc, currentDcId=$_currentDcId');
+
+      if (phone.isNotEmpty) {
+        final expectedDc = getBestInitialDc(phone);
+        _currentDcId = expectedDc;
+        _dcLoadedFromPrefs = true;
+        await prefs.setInt('tg_last_dc', expectedDc);
+        debugPrint('[TelegramAuthService] 🎯 Master DC resolved from phone $phone -> DC $_currentDcId');
+        return _currentDcId;
+      }
+
+      if (savedDc != null && savedDc >= 1 && savedDc <= 5 && savedDc != 4) {
         _currentDcId = savedDc;
+      } else {
+        _currentDcId = 5; // Default for Indian subcontinent
       }
       _dcLoadedFromPrefs = true;
     } catch (_) {}
@@ -642,6 +665,7 @@ class TelegramAuthService {
             _socketsByDc.remove(targetDc)?.destroy();
             _socketsByDc.remove(targetDc);
             _authorizedDcs.remove(targetDc);
+            _authKeysByDc.remove(targetDc);
             try {
               final prefs = await SharedPreferences.getInstance();
               await prefs.remove('tg_auth_key_dc_$targetDc');
@@ -660,124 +684,13 @@ class TelegramAuthService {
     return null;
   }
 
-  /// 🚀 Download file chunk in a BACKGROUND ISOLATE — zero UI thread blocking!
-  /// Creates a disposable MTProto connection inside Isolate.run(), performs the
-  /// entire AES-IGE encrypted download off the main thread, and returns raw bytes.
-  /// This is the critical fix: MTProto AES-IGE decryption of 256KB chunks takes
-  /// 200-500ms of synchronous CPU time. Running it on the main isolate blocks
-  /// Flutter's rendering pipeline, causing video frame drops and ANR dialogs.
-  static Future<Uint8List?> downloadFileChunkInIsolate({
-    required int dcId,
-    required int docId,
-    required int accessHash,
-    required Uint8List fileReference,
-    required int offset,
-    required int limit,
-  }) async {
-    final masterDc = await getMasterDcId();
-    final cachedDocDc = _docDcMap[docId];
-    final targetDc = (cachedDocDc != null && cachedDocDc >= 1 && cachedDocDc <= 5)
-        ? cachedDocDc
-        : ((dcId >= 1 && dcId <= 5) ? dcId : masterDc);
-
-    // Get auth key for this DC (must exist — we already authorized during first playback)
-    tg.AuthorizationKey? authKey = await _loadCachedAuthKey(targetDc);
-    if (authKey == null) {
-      // Fallback: authorize on main thread first (one-time), then retry in isolate
-      debugPrint('[TelegramAuthService] No cached auth key for DC $targetDc, falling back to main-thread download');
-      return downloadFileChunk(
-        dcId: targetDc, docId: docId, accessHash: accessHash,
-        fileReference: fileReference, offset: offset, limit: limit,
-      );
-    }
-
-    // Serialize auth key to pass into isolate (isolates can't share heap objects)
-    final authKeyJson = authKey.toJson();
-
-    // Get DC IP for direct connection inside the isolate
-    final dcOption = _dcOptions[targetDc] ?? _dcOptions[2]!;
-    final candidateIps = _dcIps[targetDc] ?? [dcOption.ipAddress];
-    final connectIp = candidateIps.first;
-    const connectPort = 443;
-
-    // Copy fileReference to a plain List<int> for isolate serialization
-    final fileRefList = List<int>.from(fileReference);
-
-    try {
-      final result = await Isolate.run<List<int>?>(() async {
-        // --- Everything below runs in a BACKGROUND ISOLATE ---
-        // No Flutter UI thread blocking whatsoever!
-
-        final rawSocket = await Socket.connect(connectIp, connectPort,
-            timeout: const Duration(seconds: 8));
-        final socket = _IoSocket(rawSocket);
-
-        final obfuscation = tg.Obfuscation.random(false, targetDc);
-        final idGenerator = tg.MessageIdGenerator();
-        await socket.send(obfuscation.preamble);
-
-        final ak = tg.AuthorizationKey.fromJson(authKeyJson);
-        final client = tg.Client(
-          socket: socket,
-          obfuscation: obfuscation,
-          authorizationKey: ak,
-          idGenerator: idGenerator,
-        );
-
-        try {
-          final location = t.InputDocumentFileLocation(
-            id: docId,
-            accessHash: accessHash,
-            fileReference: Uint8List.fromList(fileRefList),
-            thumbSize: '',
-          );
-
-          final res = await client.upload.getFile(
-            precise: true,
-            cdnSupported: false,
-            location: location,
-            offset: offset,
-            limit: limit,
-          ).timeout(const Duration(seconds: 25));
-
-          if (res.result is t.UploadFile) {
-            final uploadFile = res.result as t.UploadFile;
-            return uploadFile.bytes;
-          }
-
-          // Return null on error (migration/auth errors handled below on main thread)
-          return null;
-        } finally {
-          socket.destroy();
-        }
-      }).timeout(const Duration(seconds: 30));
-
-      if (result != null && result.isNotEmpty) {
-        return Uint8List.fromList(result);
-      }
-
-      // If isolate download returned null, fall back to main-thread download
-      // (handles DC migration, auth re-export, etc.)
-      debugPrint('[TelegramAuthService] Isolate download returned null for doc $docId, falling back to main-thread');
-      return downloadFileChunk(
-        dcId: targetDc, docId: docId, accessHash: accessHash,
-        fileReference: fileReference, offset: offset, limit: limit,
-      );
-    } catch (e) {
-      debugPrint('[TelegramAuthService] Isolate download error: $e, falling back to main-thread');
-      return downloadFileChunk(
-        dcId: targetDc, docId: docId, accessHash: accessHash,
-        fileReference: fileReference, offset: offset, limit: limit,
-      );
-    }
-  }
-
   /// Establish or retrieve existing MTProto client connection to specified DC
   static Future<tg.Client> getClient({int? dcId, bool forceNew = false}) async {
     final masterDc = await getMasterDcId();
     final targetDc = dcId ?? masterDc;
 
-    if (!forceNew && _clientsByDc.containsKey(targetDc)) {
+    final existingSocket = _socketsByDc[targetDc];
+    if (!forceNew && _clientsByDc.containsKey(targetDc) && existingSocket != null && existingSocket.isAlive) {
       return _clientsByDc[targetDc]!;
     }
 
@@ -864,13 +777,11 @@ class TelegramAuthService {
         _socketsByDc.remove(targetDc);
       }
       _clientsByDc.remove(targetDc);
+      _authorizedDcs.remove(targetDc);
     }
 
-    // Check for cached AuthKey for this DC
-    tg.AuthorizationKey? authKey;
-    if (!forceNew) {
-      authKey = await _loadCachedAuthKey(targetDc);
-    }
+    // Always check for cached AuthKey for this DC to prevent expensive 4s DH isolate computation
+    tg.AuthorizationKey? authKey = await _loadCachedAuthKey(targetDc);
 
     if (authKey == null) {
       debugPrint('[TelegramAuthService] 🚀 Running MTProto DH exchange in background isolate for DC $targetDc (zero UI lag)...');
@@ -892,7 +803,11 @@ class TelegramAuthService {
 
     final rawSocket = await _connectFastSocket(targetDc, masterDc);
 
-    final socket = _IoSocket(rawSocket);
+    final socket = _IoSocket(rawSocket, onDisconnected: () {
+      _clientsByDc.remove(targetDc);
+      _socketsByDc.remove(targetDc);
+      _authorizedDcs.remove(targetDc);
+    });
     _socketsByDc[targetDc] = socket;
 
     final obfuscation = tg.Obfuscation.random(false, targetDc);
@@ -907,35 +822,35 @@ class TelegramAuthService {
       idGenerator: idGenerator,
     );
 
-    if (targetDc == masterDc) {
-      try {
-        final cfg = await client.initConnection<t.Config>(
-          apiId: apiId,
-          deviceModel: 'TeleLearn App',
-          systemVersion: 'Android 14',
-          appVersion: '1.0.0',
-          systemLangCode: 'en',
-          langPack: '',
-          langCode: 'en',
-          query: const t.HelpGetConfig(),
-        ).timeout(const Duration(seconds: 10));
+    // 1. MUST ALWAYS initialize connection with MTProto on EVERY DC (Master or Secondary)
+    try {
+      final cfg = await client.initConnection<t.Config>(
+        apiId: apiId,
+        deviceModel: 'TeleLearn App',
+        systemVersion: 'Android 14',
+        appVersion: '1.0.0',
+        systemLangCode: 'en',
+        langPack: '',
+        langCode: 'en',
+        query: const t.HelpGetConfig(),
+      ).timeout(const Duration(seconds: 10));
 
-        if (cfg.result != null) {
-          for (final item in cfg.result!.dcOptions) {
-            if (item is t.DcOption && !item.ipv6 && !item.mediaOnly && !item.cdn) {
-              _dcOptions.putIfAbsent(item.id, () => item);
-            }
+      if (cfg.result != null && targetDc == masterDc) {
+        for (final item in cfg.result!.dcOptions) {
+          if (item is t.DcOption && !item.ipv6 && !item.mediaOnly && !item.cdn) {
+            _dcOptions.putIfAbsent(item.id, () => item);
           }
         }
-      } catch (e) {
-        debugPrint('[TelegramAuthService] initConnection note: $e');
       }
+    } catch (e) {
+      debugPrint('[TelegramAuthService] initConnection DC $targetDc note: $e');
     }
 
     _clientsByDc[targetDc] = client;
+    debugPrint('[TelegramAuthService] 📡 Connected to DC $targetDc (Master DC: $masterDc)');
 
-    // Transfer auth to secondary DC if target is different from Master DC (Parity with Telethon)
-    if (targetDc != masterDc && !_authorizedDcs.contains(targetDc)) {
+    // 2. Transfer auth to secondary DC (Required per MTProto session for downloading files)
+    if (targetDc != masterDc) {
       try {
         final masterClient = _clientsByDc[masterDc] ?? await getClient(dcId: masterDc);
         final exported = await masterClient.auth.exportAuthorization(dcId: targetDc).timeout(const Duration(seconds: 15));
@@ -945,8 +860,20 @@ class TelegramAuthService {
             id: exp.id,
             bytes: Uint8List.fromList(exp.bytes),
           ).timeout(const Duration(seconds: 15));
-          _authorizedDcs.add(targetDc);
-          debugPrint('[TelegramAuthService] 🔑 Successfully exported & imported auth from Master DC $masterDc to Target DC $targetDc: ${impRes.result}');
+          if (impRes.result is t.AuthAuthorization) {
+            _authorizedDcs.add(targetDc);
+            debugPrint('[TelegramAuthService] 🔑 Successfully exported & imported auth from Master DC $masterDc to Target DC $targetDc');
+          } else {
+            debugPrint('[TelegramAuthService] ⚠️ importAuthorization error on DC $targetDc: ${impRes.error?.errorMessage}');
+            _authorizedDcs.remove(targetDc);
+            _authKeysByDc.remove(targetDc);
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('tg_auth_key_dc_$targetDc');
+            } catch (_) {}
+          }
+        } else {
+          debugPrint('[TelegramAuthService] ⚠️ exportAuthorization error for DC $targetDc: ${exported.error?.errorMessage}');
         }
       } catch (e) {
         debugPrint('[TelegramAuthService] Export/Import auth note: $e');
@@ -980,9 +907,7 @@ class TelegramAuthService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('tg_auth_key_dc_$dcId', jsonEncode(authKey.toJson()));
-      await prefs.setInt('tg_last_dc', dcId);
-      _currentDcId = dcId;
-      _dcLoadedFromPrefs = true;
+      // Note: NEVER overwrite tg_last_dc or _currentDcId here. That is reserved strictly for primary user login DC.
     } catch (e) {
       debugPrint('[TelegramAuthService] Failed to save cached auth key: $e');
     }

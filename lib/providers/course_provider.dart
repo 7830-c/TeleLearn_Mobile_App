@@ -139,6 +139,10 @@ class CourseProvider extends ChangeNotifier {
           channelId: channel.id,
           accessHash: channel.accessHash,
           channelName: channel.name,
+          onProgress: (fetched, total) {
+            _currentSyncStatus = 'Importing "${channel.name}" ($fetched${total != null ? '/$total' : ''})...';
+            notifyListeners();
+          },
         );
         
         // Instant in-memory update avoids full SQLite read/jsonDecode freeze
@@ -185,6 +189,10 @@ class CourseProvider extends ChangeNotifier {
           phone: phone,
           channelId: channelId,
           channelName: existing?.title,
+          onProgress: (fetched, total) {
+            _currentSyncStatus = 'Refreshing "${existing?.title ?? 'Course'}" ($fetched${total != null ? '/$total' : ''})...';
+            notifyListeners();
+          },
         );
 
         // Safe Guard: Only update if new sync returned real modules, or if existing is empty

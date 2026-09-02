@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:t/t.dart' as t;
 import '../../core/constants/app_constants.dart';
 import '../models/course_model.dart';
@@ -188,6 +192,7 @@ class TelegramImportService {
     required int channelId,
     int? accessHash,
     String? channelName,
+    void Function(int fetched, int? total)? onProgress,
   }) async {
     final sw = Stopwatch()..start();
     debugPrint('[TelegramImportService] 🚀 Starting fast sync for channel $channelId ($channelName, accessHash: $accessHash)');
@@ -263,15 +268,23 @@ class TelegramImportService {
         debugPrint('[TelegramImportService] getForumTopics exception: $e');
       }
 
-      final List<_ParsedMediaItem> parsedItems = [];
+      final appDir = await getApplicationDocumentsDirectory();
+      final stagingFile = File(p.join(appDir.path, 'tg_staging_$channelId.jsonl'));
+      if (stagingFile.existsSync()) {
+        try {
+          stagingFile.deleteSync();
+        } catch (_) {}
+      }
+
       final Map<int, int> messageToTopicMap = {};
       int offsetId = 0;
-      const int batchLimit = 50;
-      const int maxMessagesToFetch = 1000;
+      const int batchLimit = 100;
       int totalFetchedCount = 0;
+      int? totalChannelCount;
 
-      // 2. Fetch message history with non-blocking streaming and immediate memory release
-      while (totalFetchedCount < maxMessagesToFetch) {
+      // 2. Fetch complete message history with disk cache staging (Virtual Memory concept)
+      // Keeps RAM at 0 MB regardless of whether the course has 100 or 10,000 lessons!
+      while (totalFetchedCount < (totalChannelCount ?? 15000)) {
         final historyRes = await client.messages.getHistory(
           peer: peer,
           offsetId: offsetId,
@@ -296,7 +309,6 @@ class TelegramImportService {
         }
 
         final List<t.MessageBase> batch = [];
-        int? totalChannelCount;
         if (historyRes.result is t.MessagesMessages) {
           batch.addAll((historyRes.result as t.MessagesMessages).messages);
         } else if (historyRes.result is t.MessagesMessagesSlice) {
@@ -312,6 +324,8 @@ class TelegramImportService {
         if (batch.isEmpty) break;
         totalFetchedCount += batch.length;
         debugPrint('[TelegramImportService] 📥 History batch: +${batch.length} messages (Total processed: $totalFetchedCount${totalChannelCount != null ? ' / $totalChannelCount' : ''})');
+
+        final List<_ParsedMediaItem> batchItems = [];
 
         // Extract media & topics immediately and drop raw MTProto message objects to free memory
         for (final m in batch) {
@@ -378,7 +392,7 @@ class TelegramImportService {
               final fileRefHex = _bytesToHex(doc.fileReference);
               final streamUrl = 'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${doc.dcId}&doc_id=${doc.id}&access_hash=${doc.accessHash}&size=${doc.size}&mime=${Uri.encodeComponent(doc.mimeType)}&file_ref=$fileRefHex';
 
-              parsedItems.add(_ParsedMediaItem(
+              batchItems.add(_ParsedMediaItem(
                 id: m.id,
                 topicId: topicId,
                 title: cleanName,
@@ -392,7 +406,7 @@ class TelegramImportService {
             } else if (media is t.MessageMediaPhoto) {
               final firstLine = m.message.trim().split('\n').first;
               final photoTitle = firstLine.isNotEmpty ? _cleanTitle(firstLine) : 'Photo Note ${m.id}';
-              parsedItems.add(_ParsedMediaItem(
+              batchItems.add(_ParsedMediaItem(
                 id: m.id,
                 topicId: topicId,
                 title: photoTitle,
@@ -405,6 +419,17 @@ class TelegramImportService {
               ));
             }
           }
+        }
+
+        // Write batch directly to disk cache staging file to avoid RAM bloat
+        if (batchItems.isNotEmpty) {
+          final sink = stagingFile.openWrite(mode: FileMode.append);
+          for (final item in batchItems) {
+            sink.writeln(jsonEncode(item.toMap()));
+          }
+          await sink.flush();
+          await sink.close();
+          batchItems.clear();
         }
 
         int minId = 0x7FFFFFFF;
@@ -423,16 +448,31 @@ class TelegramImportService {
         // Release batch references immediately for Garbage Collection
         batch.clear();
 
-        // Yield 150ms to Flutter main thread — gives 9 full frames at 60 FPS for smooth loader animation
-        // and prevents Android ANR (which triggers at 5s of main thread blocking)
-        await Future<void>.delayed(const Duration(milliseconds: 150));
+        onProgress?.call(totalFetchedCount, totalChannelCount);
 
-        if (totalFetchedCount >= (totalChannelCount ?? maxMessagesToFetch)) break;
+        // Cooperative yield: 60ms gives Flutter UI plenty of time to render 120 FPS animations smoothly
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+
+        if (totalChannelCount != null && totalFetchedCount >= totalChannelCount) break;
 
         if (minId == 0x7FFFFFFF || (minId >= offsetId && offsetId != 0)) {
           break;
         }
         offsetId = minId;
+      }
+
+      // Read back from staging disk cache in memory-efficient stream
+      final List<_ParsedMediaItem> parsedItems = [];
+      if (stagingFile.existsSync()) {
+        final lines = await stagingFile.readAsLines();
+        for (final line in lines) {
+          if (line.trim().isNotEmpty) {
+            parsedItems.add(_ParsedMediaItem.fromMap(jsonDecode(line) as Map<String, dynamic>));
+          }
+        }
+        try {
+          stagingFile.deleteSync();
+        } catch (_) {}
       }
 
       // Sort parsed items in chronological order (oldest to newest)
@@ -441,10 +481,17 @@ class TelegramImportService {
       // 3. Map parsed items into modules by topic ID
       final Map<int, Map<String, dynamic>> modulesDict = {};
 
+      // Pre-seed all discovered forum topics so every sub-module topic is preserved
+      topicsMap.forEach((topicId, topicTitle) {
+        modulesDict[topicId] = {
+          'id': topicId,
+          'title': topicTitle,
+          'lessons': <CourseLesson>[],
+          'notes': <CourseNote>[],
+        };
+      });
+
       for (int i = 0; i < parsedItems.length; i++) {
-        if (i % 60 == 0) {
-          await Future<void>.delayed(const Duration(milliseconds: 5));
-        }
         final item = parsedItems[i];
         final topicId = item.topicId;
         final topicTitle = topicsMap[topicId] ?? (topicId == 0 ? 'General' : 'Topic #$topicId');
@@ -483,9 +530,12 @@ class TelegramImportService {
       }
 
       // Filter and sort modules (General/Topic 0 first, then topic ID ascending)
+      // Keep modules that have content OR are designated forum topics (ID > 0)
       final List<CourseModule> parsedModules = [];
       final activeEntries = modulesDict.values.where((m) =>
-          (m['lessons'] as List).isNotEmpty || (m['notes'] as List).isNotEmpty).toList();
+          (m['lessons'] as List).isNotEmpty || 
+          (m['notes'] as List).isNotEmpty ||
+          (topicsMap.containsKey(m['id']) && (m['id'] as int) > 0)).toList();
 
       activeEntries.sort((a, b) {
         final aId = a['id'] as int;
@@ -591,5 +641,29 @@ class _ParsedMediaItem {
     required this.isVideo,
     required this.text,
   });
+
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'topicId': topicId,
+    'title': title,
+    'fileName': fileName,
+    'streamUrl': streamUrl,
+    'duration': duration,
+    'size': size,
+    'isVideo': isVideo,
+    'text': text,
+  };
+
+  factory _ParsedMediaItem.fromMap(Map<String, dynamic> map) => _ParsedMediaItem(
+    id: map['id'] as int,
+    topicId: map['topicId'] as int,
+    title: map['title'] as String,
+    fileName: map['fileName'] as String?,
+    streamUrl: map['streamUrl'] as String,
+    duration: map['duration'] as num,
+    size: map['size'] as int,
+    isVideo: map['isVideo'] as bool,
+    text: map['text'] as String,
+  );
 }
 

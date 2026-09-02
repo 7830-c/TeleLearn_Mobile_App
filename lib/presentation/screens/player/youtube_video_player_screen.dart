@@ -46,24 +46,31 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   bool _hasMarkedCompleted = false;
 
   VideoPlayerController? _controller;
-  bool _isBuffering = false;
+
+  // Independent Lag-Free ValueNotifiers (Zero-Rebuild UI Architecture)
+  final ValueNotifier<bool> _showControlsNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> _bufferingNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<double> _dragPositionNotifier = ValueNotifier<double>(-1.0); // <0 = not dragging
+  final ValueNotifier<bool> _leftSeekRippleNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _rightSeekRippleNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _speedBoostNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isPlayingNotifier = ValueNotifier<bool>(false);
+
+  // Controls Visibility & Buffering State via ValueNotifiers
+  bool get _showControls => _showControlsNotifier.value;
+  set _showControls(bool val) => _showControlsNotifier.value = val;
+
+  bool get _isBuffering => _bufferingNotifier.value;
+  set _isBuffering(bool val) => _bufferingNotifier.value = val;
+
+  bool get _isDraggingScrubber => _dragPositionNotifier.value >= 0;
+
   String? _errorMessage;
 
-  // Controls Visibility & Timer
-  bool _showControls = true;
   Timer? _controlsTimer;
   Timer? _progressSaveTimer;
-
-  // Gesture HUD States
-  bool _showLeftSeekRipple = false;
-  bool _showRightSeekRipple = false;
-  bool _isLongPressSpeedBoost = false;
   double _playbackSpeed = 1.0;
   Timer? _hudDismissTimer;
-
-  // Smooth Scrubber Dragging State
-  bool _isDraggingScrubber = false;
-  double _dragPositionMs = 0.0;
   bool _isSeeking = false;
 
   // Pinch-to-Zoom Controller
@@ -90,15 +97,14 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     if (widget.autoPlay) {
       _initializePlayer(autoPlay: true);
     } else {
-      _isBuffering = false;
-      _showControls = true;
+      _bufferingNotifier.value = false;
+      _showControlsNotifier.value = true;
     }
   }
 
   void _startPlaybackFromStandby() {
     setState(() {
       _isInitialStandby = false;
-      _isBuffering = true;
     });
     _initializePlayer(autoPlay: true);
   }
@@ -131,10 +137,7 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isAppBackgrounded = true;
       _saveCurrentProgress();
       _controller?.pause();
@@ -165,6 +168,12 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     _controller?.dispose();
     _zoomController.dispose();
     _scrollController.dispose();
+    _showControlsNotifier.dispose();
+    _bufferingNotifier.dispose();
+    _dragPositionNotifier.dispose();
+    _leftSeekRippleNotifier.dispose();
+    _rightSeekRippleNotifier.dispose();
+    _speedBoostNotifier.dispose();
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -176,7 +185,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     _controlsTimer?.cancel();
     if (!_isScreenLocked && (_controller?.value.isPlaying ?? false) && !_isDraggingScrubber) {
       _controlsTimer = Timer(const Duration(seconds: 4), () {
-        if (mounted && !_isDraggingScrubber) setState(() => _showControls = false);
+        if (mounted && !_isDraggingScrubber) {
+          _showControlsNotifier.value = false;
+        }
       });
     }
   }
@@ -308,6 +319,7 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       }
 
       newController.addListener(_onPlayerStateChanged);
+      _isPlayingNotifier.value = shouldPlay;
 
       setState(() {
         _isBuffering = false;
@@ -342,8 +354,6 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     }
   }
 
-  DateTime _lastBufferUpdateTime = DateTime.fromMillisecondsSinceEpoch(0);
-
   void _onPlayerStateChanged() {
     if (!mounted || _controller == null) return;
 
@@ -351,15 +361,14 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     if (_isSeeking && (!val.isBuffering || val.isPlaying)) {
       _isSeeking = false;
     }
-    if (val.isBuffering != _isBuffering) {
-      if (val.isPlaying && !_isBuffering) {
+    if (val.isPlaying != _isPlayingNotifier.value) {
+      _isPlayingNotifier.value = val.isPlaying;
+    }
+    if (val.isBuffering != _bufferingNotifier.value) {
+      if (val.isPlaying && !_bufferingNotifier.value) {
         // Video is actively playing smoothly, ignore transient background buffer top-up
       } else {
-        final now = DateTime.now();
-        if (now.difference(_lastBufferUpdateTime).inMilliseconds > 600) {
-          _lastBufferUpdateTime = now;
-          if (mounted) setState(() => _isBuffering = val.isBuffering);
-        }
+        _bufferingNotifier.value = val.isBuffering;
       }
     }
 
@@ -419,28 +428,26 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       return;
     }
     if (_controller == null || !_controller!.value.isInitialized) return;
-    setState(() {
-      if (_controller!.value.isPlaying) {
-        _controller!.pause();
-        _controlsTimer?.cancel();
-      } else {
-        _controller!.play();
-        _resetControlsTimer();
-      }
-    });
+    if (_controller!.value.isPlaying) {
+      _controller!.pause();
+      _isPlayingNotifier.value = false;
+      _controlsTimer?.cancel();
+    } else {
+      _controller!.play();
+      _isPlayingNotifier.value = true;
+      _resetControlsTimer();
+    }
   }
 
   void _onDoubleTapLeft() {
     if (_isScreenLocked || _controller == null || !_controller!.value.isInitialized) return;
-    setState(() {
-      _isSeeking = true;
-      _isBuffering = true;
-    });
+    _isSeeking = true;
+    _bufferingNotifier.value = true;
     final newPos = _controller!.value.position - const Duration(seconds: 10);
     _controller!.seekTo(newPos < Duration.zero ? Duration.zero : newPos).then((_) {
       if (mounted) {
         _controller?.play();
-        setState(() => _isSeeking = false);
+        _isSeeking = false;
       }
     });
     _triggerSeekFeedback(isForward: false);
@@ -448,16 +455,14 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
   void _onDoubleTapRight() {
     if (_isScreenLocked || _controller == null || !_controller!.value.isInitialized) return;
-    setState(() {
-      _isSeeking = true;
-      _isBuffering = true;
-    });
+    _isSeeking = true;
+    _bufferingNotifier.value = true;
     final maxDur = _controller!.value.duration;
     final newPos = _controller!.value.position + const Duration(seconds: 10);
     _controller!.seekTo(newPos > maxDur ? maxDur : newPos).then((_) {
       if (mounted) {
         _controller?.play();
-        setState(() => _isSeeking = false);
+        _isSeeking = false;
       }
     });
     _triggerSeekFeedback(isForward: true);
@@ -465,21 +470,17 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
   void _triggerSeekFeedback({required bool isForward}) {
     HapticFeedback.lightImpact();
-    setState(() {
-      if (isForward) {
-        _showRightSeekRipple = true;
-      } else {
-        _showLeftSeekRipple = true;
-      }
-    });
+    if (isForward) {
+      _rightSeekRippleNotifier.value = true;
+    } else {
+      _leftSeekRippleNotifier.value = true;
+    }
 
     _hudDismissTimer?.cancel();
     _hudDismissTimer = Timer(const Duration(milliseconds: 700), () {
       if (mounted) {
-        setState(() {
-          _showLeftSeekRipple = false;
-          _showRightSeekRipple = false;
-        });
+        _leftSeekRippleNotifier.value = false;
+        _rightSeekRippleNotifier.value = false;
       }
     });
   }
@@ -487,17 +488,13 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   void _onLongPressStart(LongPressStartDetails details) {
     if (_controller == null || !_controller!.value.isInitialized) return;
     HapticFeedback.mediumImpact();
-    setState(() {
-      _isLongPressSpeedBoost = true;
-    });
+    _speedBoostNotifier.value = true;
     _controller!.setPlaybackSpeed(2.0);
   }
 
   void _onLongPressEnd(LongPressEndDetails details) {
     if (_controller == null || !_controller!.value.isInitialized) return;
-    setState(() {
-      _isLongPressSpeedBoost = false;
-    });
+    _speedBoostNotifier.value = false;
     _controller!.setPlaybackSpeed(_playbackSpeed);
   }
 
@@ -664,8 +661,11 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
   void _exitPlayerScreen([CourseModule? currentModule]) {
     _saveCurrentProgress();
-    _controller?.pause();
-    _controller?.removeListener(_onPlayerStateChanged);
+    final c = _controller;
+    _controller = null;
+    c?.pause();
+    c?.removeListener(_onPlayerStateChanged);
+    c?.dispose();
     LocalStreamingServer.abortPreviousStreams();
 
     if (widget.fromDashboard) {
@@ -967,17 +967,16 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       if (_isInitialStandby) {
                         _startPlaybackFromStandby();
                         return;
                       }
-                      if (_isScreenLocked) {
-                        setState(() => _showControls = !_showControls);
-                        return;
+                      _showControlsNotifier.value = !_showControlsNotifier.value;
+                      if (_showControlsNotifier.value && !_isScreenLocked) {
+                        _resetControlsTimer();
                       }
-                      setState(() => _showControls = !_showControls);
-                      _resetControlsTimer();
                     },
                     onDoubleTapDown: (details) {
                       if (_isScreenLocked) return;
@@ -1031,118 +1030,148 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                           ),
 
                         // Left 10s Double Tap Ripple Feedback
-                        if (_showLeftSeekRipple)
-                          Positioned(
-                            left: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: 140,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.15),
-                                borderRadius: const BorderRadius.horizontal(right: Radius.circular(120)),
-                              ),
-                              child: const Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.fast_rewind_rounded, color: Colors.white, size: 36),
-                                    SizedBox(height: 4),
-                                    Text(
-                                      '-10s',
-                                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                                    ),
-                                  ],
+                        ValueListenableBuilder<bool>(
+                          valueListenable: _leftSeekRippleNotifier,
+                          builder: (context, showLeftRipple, _) {
+                            if (!showLeftRipple) return const SizedBox.shrink();
+                            return Positioned(
+                              left: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: 140,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(120)),
+                                ),
+                                child: const Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.fast_rewind_rounded, color: Colors.white, size: 36),
+                                      SizedBox(height: 4),
+                                      Text('-10s', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
+                        ),
 
                         // Right 10s Double Tap Ripple Feedback
-                        if (_showRightSeekRipple)
-                          Positioned(
-                            right: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: 140,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.15),
-                                borderRadius: const BorderRadius.horizontal(left: Radius.circular(120)),
+                        ValueListenableBuilder<bool>(
+                          valueListenable: _rightSeekRippleNotifier,
+                          builder: (context, showRightRipple, _) {
+                            if (!showRightRipple) return const SizedBox.shrink();
+                            return Positioned(
+                              right: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: 140,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(120)),
+                                ),
+                                child: const Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.fast_forward_rounded, color: Colors.white, size: 36),
+                                      SizedBox(height: 4),
+                                      Text('+10s', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                    ],
+                                  ),
+                                ),
                               ),
-                              child: const Center(
-                                child: Column(
+                            );
+                          },
+                        ),
+
+                        // 2X Speed Boost Top Banner
+                        ValueListenableBuilder<bool>(
+                          valueListenable: _speedBoostNotifier,
+                          builder: (context, isSpeedBoost, _) {
+                            if (!isSpeedBoost) return const SizedBox.shrink();
+                            return Positioned(
+                              top: 16,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.8),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                                ),
+                                child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.fast_forward_rounded, color: Colors.white, size: 36),
-                                    SizedBox(height: 4),
+                                    Icon(Icons.bolt_rounded, color: Color(0xFFFBBF24), size: 16),
+                                    SizedBox(width: 4),
                                     Text(
-                                      '+10s',
-                                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                      '2X SPEED',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 12,
+                                      ),
                                     ),
                                   ],
                                 ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
+                        ),
 
-                        // 2X Speed Boost Top Banner
-                        if (_isLongPressSpeedBoost)
-                          Positioned(
-                            top: 16,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        // Buffering Spinner (only when actively buffering)
+                        ValueListenableBuilder<bool>(
+                          valueListenable: _bufferingNotifier,
+                          builder: (context, isBuffering, _) {
+                            if (!isBuffering || !(_controller?.value.isInitialized ?? false)) {
+                              return const SizedBox.shrink();
+                            }
+                            return Container(
+                              width: 44,
+                              height: 44,
                               decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.8),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                                color: Colors.black.withValues(alpha: 0.5),
+                                shape: BoxShape.circle,
                               ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.bolt_rounded, color: Color(0xFFFBBF24), size: 16),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    '2X SPEED',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 12,
+                              padding: const EdgeInsets.all(8),
+                              child: const CircularProgressIndicator(
+                                strokeWidth: 3,
+                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2563EB)),
+                              ),
+                            );
+                          },
+                        ),
+
+                        // ── MODERN CONTROLS OVERLAY (Isolated Zero-Rebuild Architecture) ──
+                        ValueListenableBuilder<bool>(
+                          valueListenable: _showControlsNotifier,
+                          builder: (context, showControls, _) {
+                            if (!showControls || (!(_controller?.value.isInitialized ?? false) && !_isInitialStandby)) {
+                              return const SizedBox.shrink();
+                            }
+                            return Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                // Dark gradient background layer (tap to dismiss controls instantly)
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {
+                                    _showControlsNotifier.value = false;
+                                  },
+                                  child: Container(
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [Colors.black87, Colors.transparent, Colors.black87],
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                      ),
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          ),
-
-                        // Buffering Spinner (only when already playing and buffering)
-                        if (_isBuffering && (_controller?.value.isInitialized ?? false) && !_showLeftSeekRipple && !_showRightSeekRipple)
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.5),
-                              shape: BoxShape.circle,
-                            ),
-                            padding: const EdgeInsets.all(8),
-                            child: const CircularProgressIndicator(
-                              strokeWidth: 3,
-                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2563EB)),
-                            ),
-                          ),
-
-                        // ── MODERN CONTROLS OVERLAY ──
-                        if (_showControls && ((_controller?.value.isInitialized ?? false) || _isInitialStandby)) ...[
-                          // Dark gradient background layer
-                          Container(
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Colors.black87, Colors.transparent, Colors.black87],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                            ),
-                          ),
+                                ),
 
                           // Top Bar
                           Positioned(
@@ -1242,23 +1271,32 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                         ),
                                       ],
                                     ),
-                                    child: IconButton(
-                                      padding: EdgeInsets.zero,
-                                      icon: (_isBuffering || _isSeeking)
-                                          ? const SizedBox(
-                                              width: 28,
-                                              height: 28,
-                                              child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white),
-                                            )
-                                          : Icon(
-                                              (_controller?.value.isPlaying ?? false)
-                                                  ? Icons.pause_rounded
-                                                  : Icons.play_arrow_rounded,
-                                              color: Colors.white,
-                                              size: 38,
-                                            ),
-                                      onPressed: (_isBuffering || _isSeeking) ? null : _togglePlayPause,
-                                    ),
+                                    child: ValueListenableBuilder<bool>(
+                                       valueListenable: _isPlayingNotifier,
+                                       builder: (context, isPlaying, _) {
+                                         return ValueListenableBuilder<bool>(
+                                           valueListenable: _bufferingNotifier,
+                                           builder: (context, isBuffering, _) {
+                                             final bool showSpin = isBuffering || _isSeeking;
+                                             return IconButton(
+                                               padding: EdgeInsets.zero,
+                                               icon: showSpin
+                                                   ? const SizedBox(
+                                                       width: 28,
+                                                       height: 28,
+                                                       child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white),
+                                                     )
+                                                   : Icon(
+                                                       isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                                       color: Colors.white,
+                                                       size: 38,
+                                                     ),
+                                               onPressed: showSpin ? null : _togglePlayPause,
+                                             );
+                                           },
+                                         );
+                                       },
+                                     ),
                                   ),
                                   const SizedBox(width: 24),
 
@@ -1280,7 +1318,6 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                 ],
                               ),
                             ),
-
                           // Bottom Scrubber Bar & Controls Row
                           if (!_isScreenLocked && !_isInitialStandby && _controller != null)
                             Positioned(
@@ -1290,168 +1327,162 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                               child: ValueListenableBuilder<VideoPlayerValue>(
                                 valueListenable: _controller!,
                                 builder: (context, playerVal, _) {
-                                  final double livePosMs = _isDraggingScrubber
-                                      ? _dragPositionMs
-                                      : playerVal.position.inMilliseconds.toDouble();
-                                  final double liveDurMs = playerVal.duration.inMilliseconds.toDouble();
-                                  final double validMax = liveDurMs > 0 ? liveDurMs : 1.0;
-                                  final double liveSliderVal = livePosMs.clamp(0.0, validMax);
+                                  return ValueListenableBuilder<double>(
+                                    valueListenable: _dragPositionNotifier,
+                                    builder: (context, dragPos, _) {
+                                      final bool isDragging = dragPos >= 0;
+                                      final double livePosMs = isDragging
+                                          ? dragPos
+                                          : playerVal.position.inMilliseconds.toDouble();
+                                      final double liveDurMs = playerVal.duration.inMilliseconds.toDouble();
+                                      final double validMax = liveDurMs > 0 ? liveDurMs : 1.0;
+                                      final double liveSliderVal = livePosMs.clamp(0.0, validMax);
 
-                                  return Container(
-                                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        // Drag Position Floating Indicator
-                                        if (_isDraggingScrubber)
-                                          Container(
-                                            margin: const EdgeInsets.only(bottom: 4),
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: Colors.black.withValues(alpha: 0.85),
-                                              borderRadius: BorderRadius.circular(12),
-                                              border: Border.all(color: AppColors.primary.withValues(alpha: 0.6)),
-                                            ),
-                                            child: Text(
-                                              '${DurationFormatter.formatTimestamp((_dragPositionMs / 1000).toInt())}  /  ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
-                                              style: GoogleFonts.robotoMono(
-                                                color: Colors.white,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ),
-
-                                        // Scrub Slider
-                                        SliderTheme(
-                                          data: SliderTheme.of(context).copyWith(
-                                            trackHeight: 3.5,
-                                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6.5),
-                                            activeTrackColor: const Color(0xFF2563EB),
-                                            inactiveTrackColor: Colors.white.withValues(alpha: 0.25),
-                                            thumbColor: Colors.white,
-                                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                                          ),
-                                          child: Slider(
-                                            value: liveSliderVal,
-                                            min: 0.0,
-                                            max: validMax,
-                                            onChangeStart: (val) {
-                                              setState(() {
-                                                _isDraggingScrubber = true;
-                                                _isSeeking = true;
-                                                _dragPositionMs = val;
-                                              });
-                                              _controlsTimer?.cancel();
-                                            },
-                                            onChanged: (val) {
-                                              setState(() {
-                                                _dragPositionMs = val;
-                                              });
-                                            },
-                                            onChangeEnd: (val) async {
-                                              _isDraggingScrubber = false;
-                                              setState(() {
-                                                _isSeeking = true;
-                                                _isBuffering = true;
-                                              });
-                                              if (_controller != null && _controller!.value.isInitialized) {
-                                                await _controller!.seekTo(Duration(milliseconds: val.toInt()));
-                                                await _controller!.play();
-                                              }
-                                              if (mounted) {
-                                                setState(() {
-                                                  _isSeeking = false;
-                                                });
-                                              }
-                                              _resetControlsTimer();
-                                            },
-                                          ),
-                                        ),
-
-                                        // Bottom Controls Row
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      return Container(
+                                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            // Monospace Timestamps (Smooth 60 FPS real-time update)
-                                            RichText(
-                                              text: TextSpan(
-                                                style: GoogleFonts.robotoMono(fontSize: 12, fontWeight: FontWeight.w600),
-                                                children: [
-                                                  TextSpan(
-                                                    text: DurationFormatter.formatTimestamp((livePosMs / 1000).toInt()),
-                                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-                                                  ),
-                                                  TextSpan(
-                                                    text: ' / ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
-                                                    style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-
-                                            // Right: Speed Capsule [ 1.5x ⚡ ] + Fullscreen Button
-                                            Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                // Speed Selector Capsule Button (Opens scrollable modal with speeds up to 3.0x)
-                                                InkWell(
-                                                  onTap: _showSpeedSelectionModal,
-                                                  borderRadius: BorderRadius.circular(16),
-                                                  child: Container(
-                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                                    decoration: BoxDecoration(
-                                                      color: const Color(0xFF1E293B).withValues(alpha: 0.85),
-                                                      borderRadius: BorderRadius.circular(16),
-                                                      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-                                                    ),
-                                                    child: Row(
-                                                      mainAxisSize: MainAxisSize.min,
-                                                      children: [
-                                                        const Icon(Icons.bolt_rounded, size: 14, color: Colors.white),
-                                                        const SizedBox(width: 4),
-                                                        Text(
-                                                          '${_playbackSpeed == 1.0 ? '1' : _playbackSpeed}x',
-                                                          style: GoogleFonts.inter(
-                                                            color: Colors.white,
-                                                            fontSize: 11,
-                                                            fontWeight: FontWeight.w800,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
+                                            // Drag Position Floating Indicator
+                                            if (isDragging)
+                                              Container(
+                                                margin: const EdgeInsets.only(bottom: 4),
+                                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black.withValues(alpha: 0.85),
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.6)),
+                                                ),
+                                                child: Text(
+                                                  '${DurationFormatter.formatTimestamp((dragPos / 1000).toInt())}  /  ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
+                                                  style: GoogleFonts.robotoMono(
+                                                    color: Colors.white,
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w700,
                                                   ),
                                                 ),
-                                                const SizedBox(width: 10),
-                                                // Fullscreen Button
-                                                Container(
-                                                  width: 34,
-                                                  height: 34,
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.black.withValues(alpha: 0.4),
-                                                    shape: BoxShape.circle,
+                                              ),
+
+                                            // Scrub Slider (120 FPS Butter Smooth, Zero Rebuilds)
+                                            SliderTheme(
+                                              data: SliderTheme.of(context).copyWith(
+                                                trackHeight: 3.5,
+                                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6.5),
+                                                activeTrackColor: const Color(0xFF2563EB),
+                                                inactiveTrackColor: Colors.white.withValues(alpha: 0.25),
+                                                thumbColor: Colors.white,
+                                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                                              ),
+                                              child: Slider(
+                                                value: liveSliderVal,
+                                                min: 0.0,
+                                                max: validMax,
+                                                onChangeStart: (val) {
+                                                  _dragPositionNotifier.value = val;
+                                                  _controlsTimer?.cancel();
+                                                },
+                                                onChanged: (val) {
+                                                  _dragPositionNotifier.value = val;
+                                                },
+                                                onChangeEnd: (val) async {
+                                                  _dragPositionNotifier.value = -1.0;
+                                                  if (_controller != null && _controller!.value.isInitialized) {
+                                                    await _controller!.seekTo(Duration(milliseconds: val.toInt()));
+                                                    await _controller!.play();
+                                                  }
+                                                  _resetControlsTimer();
+                                                },
+                                              ),
+                                            ),
+
+                                            // Bottom Controls Row
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                // Monospace Timestamps (Smooth 60 FPS real-time update)
+                                                RichText(
+                                                  text: TextSpan(
+                                                    style: GoogleFonts.robotoMono(fontSize: 12, fontWeight: FontWeight.w600),
+                                                    children: [
+                                                      TextSpan(
+                                                        text: DurationFormatter.formatTimestamp((livePosMs / 1000).toInt()),
+                                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                                                      ),
+                                                      TextSpan(
+                                                        text: ' / ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
+                                                        style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+                                                      ),
+                                                    ],
                                                   ),
-                                                  child: IconButton(
-                                                    padding: EdgeInsets.zero,
-                                                    icon: Icon(
-                                                      isFullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                                                      color: Colors.white,
-                                                      size: 22,
+                                                ),
+
+                                                // Right: Speed Capsule [ 1.5x ⚡ ] + Fullscreen Button
+                                                Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    // Speed Selector Capsule Button
+                                                    InkWell(
+                                                      onTap: _showSpeedSelectionModal,
+                                                      borderRadius: BorderRadius.circular(16),
+                                                      child: Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                                        decoration: BoxDecoration(
+                                                          color: const Color(0xFF1E293B).withValues(alpha: 0.85),
+                                                          borderRadius: BorderRadius.circular(16),
+                                                          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                                                        ),
+                                                        child: Row(
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            const Icon(Icons.bolt_rounded, size: 14, color: Colors.white),
+                                                            const SizedBox(width: 4),
+                                                            Text(
+                                                              '${_playbackSpeed == 1.0 ? '1' : _playbackSpeed}x',
+                                                              style: GoogleFonts.inter(
+                                                                color: Colors.white,
+                                                                fontSize: 11,
+                                                                fontWeight: FontWeight.w800,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
                                                     ),
-                                                    onPressed: _toggleFullscreen,
-                                                  ),
+                                                    const SizedBox(width: 10),
+                                                    // Fullscreen Button
+                                                    Container(
+                                                      width: 34,
+                                                      height: 34,
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.black.withValues(alpha: 0.4),
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                      child: IconButton(
+                                                        padding: EdgeInsets.zero,
+                                                        icon: Icon(
+                                                          isFullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                                                          color: Colors.white,
+                                                          size: 22,
+                                                        ),
+                                                        onPressed: _toggleFullscreen,
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ],
                                             ),
                                           ],
                                         ),
-                                      ],
-                                    ),
+                                      );
+                                    },
                                   );
                                 },
                               ),
                             ),
-                        ],
+                              ],
+                            );
+                          },
+                        ),
                       ],
                     ),
                   ),
