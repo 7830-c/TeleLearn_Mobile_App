@@ -25,11 +25,9 @@ class LocalStreamingServer {
   static const int _maxCacheBytes = 300 * 1024 * 1024; // 300 MB disposable cap
   static const int _chunkSizeBytes = 2 * 1024 * 1024; // 2 MB chunk block
 
-  static int _activeStreamEpoch = 0;
-
-  /// Abort all previous in-flight MTProto background stream loops
+  /// Flush transient in-memory buffers when transitioning streams
   static void abortPreviousStreams() {
-    _activeStreamEpoch++;
+    _inFlightChunkFutures.clear();
   }
 
   LocalStreamingServer._init();
@@ -84,6 +82,15 @@ class LocalStreamingServer {
 
   String getProxiedStreamUrl(String remoteUrl, {String quality = 'turbo'}) {
     if (!_isRunning) return remoteUrl;
+    if (remoteUrl.contains('/tg_stream')) {
+      try {
+        final uri = Uri.parse(remoteUrl);
+        if (uri.port != _port) {
+          return uri.replace(port: _port).toString();
+        }
+      } catch (_) {}
+      return remoteUrl;
+    }
     if (remoteUrl.startsWith('http://127.0.0.1:$_port') || remoteUrl.startsWith('http://localhost:$_port')) {
       return remoteUrl;
     }
@@ -175,7 +182,7 @@ class LocalStreamingServer {
   }
 
   static final Map<String, Uint8List> _memChunkCache = {};
-  static const int _maxMemChunks = 16; // 4 MB RAM cache (lightweight on memory)
+  static const int _maxMemChunks = 32; // 8-16 MB RAM cache (lightweight and responsive)
 
   static void _putMemChunk(String key, Uint8List bytes) {
     if (_memChunkCache.length >= _maxMemChunks) {
@@ -197,7 +204,14 @@ class LocalStreamingServer {
       final accessHash = int.tryParse(params['access_hash'] ?? '') ?? 0;
       final totalSize = int.tryParse(params['size'] ?? '') ?? 0;
       final fileRefHex = params['file_ref'] ?? '';
-      final mime = params['mime'] ?? 'video/mp4';
+      var mime = params['mime'] ?? 'video/mp4';
+      if (mime.isEmpty ||
+          mime == 'application/octet-stream' ||
+          mime == 'binary/octet-stream' ||
+          mime == 'application/x-matroska' ||
+          mime == 'video/x-matroska') {
+        mime = 'video/mp4';
+      }
 
       if (docId == 0 || accessHash == 0 || fileRefHex.isEmpty) {
         clientRes.statusCode = HttpStatus.badRequest;
@@ -325,19 +339,12 @@ class LocalStreamingServer {
 
       void triggerPrefetch(int nextChunkIdx) {
         if (!isContinuousStream || nextChunkIdx > endChunk) return;
-        // Prefetch up to 3 chunks ahead in parallel pipeline for 0-latency playback
-        for (int p = 0; p < 3; p++) {
-          final targetIdx = nextChunkIdx + p;
-          if (targetIdx > endChunk) break;
-          final nextKey = '${docId}_$targetIdx';
-          if (_memChunkCache.containsKey(nextKey) || _inFlightChunkFutures.containsKey(nextKey)) continue;
-          unawaited(fetchChunk(targetIdx));
-        }
+        // Prefetch 1 lookahead chunk ahead to keep memory light and avoid CPU isolate starvation
+        final nextKey = '${docId}_$nextChunkIdx';
+        if (_memChunkCache.containsKey(nextKey) || _inFlightChunkFutures.containsKey(nextKey)) return;
+        unawaited(fetchChunk(nextChunkIdx));
       }
 
-      // Track active session epoch to abort orphaned background work when switching videos (exempting download tasks)
-      final bool isDownloader = params['is_download'] == '1' || clientReq.headers.value('user-agent')?.contains('TeleLearnDownloader') == true;
-      final int sessionEpoch = _activeStreamEpoch;
       bool isClientDisconnected = false;
       clientRes.done.catchError((_) {
         isClientDisconnected = true;
@@ -348,16 +355,14 @@ class LocalStreamingServer {
 
       for (int c = startChunk; c <= endChunk; c++) {
         if (remaining <= 0 || isClientDisconnected) break;
-        if (!isDownloader && _activeStreamEpoch != sessionEpoch) break;
 
         // Pipeline upcoming chunk in background
-        if (isContinuousStream && c + 1 <= endChunk && (isDownloader || _activeStreamEpoch == sessionEpoch)) {
+        if (isContinuousStream && c + 1 <= endChunk && !isClientDisconnected) {
           triggerPrefetch(c + 1);
         }
 
         final chunkBytes = await fetchChunk(c);
-        if ((!isDownloader && _activeStreamEpoch != sessionEpoch) || isClientDisconnected) break;
-        if (chunkBytes == null || chunkBytes.isEmpty) {
+        if (isClientDisconnected || chunkBytes == null || chunkBytes.isEmpty) {
           break;
         }
 
@@ -377,8 +382,6 @@ class LocalStreamingServer {
             clientRes.add(Uint8List.sublistView(chunkBytes, offsetInChunk, offsetInChunk + toSend));
           }
           await clientRes.flush();
-          // Yield microtask to Flutter UI isolate to keep 60 FPS scrolling and prevent ANR
-          await Future<void>.delayed(Duration.zero);
         } catch (_) {
           // Client closed connection (e.g. user seeked, switched videos, or closed screen)
           isClientDisconnected = true;
@@ -429,7 +432,7 @@ class LocalStreamingServer {
         return b;
       }
       if (retry < 2) {
-        await Future.delayed(Duration(milliseconds: 150 * (retry + 1)));
+        await Future.delayed(Duration(milliseconds: 50 * (retry + 1)));
       }
     }
     return null;

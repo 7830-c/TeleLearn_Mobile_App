@@ -11,6 +11,7 @@ class AuthProvider extends ChangeNotifier {
   bool _isVerifying = false;
   String _phoneNumber = '';
   String _phoneCodeHash = '';
+  String _deliveryType = 'app'; // 'app', 'sms', 'call'
   int _authStep = 1; // 1 = Phone, 2 = OTP, 3 = 2FA Password
   String? _errorMessage;
 
@@ -18,6 +19,7 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isLoggedIn => _user?.isLoggedIn ?? false;
   String get phoneNumber => _phoneNumber;
+  String get deliveryType => _deliveryType;
   int get authStep => _authStep;
   String? get errorMessage => _errorMessage;
   bool get isSendingOtp => _isSendingOtp;
@@ -79,11 +81,36 @@ class AuthProvider extends ChangeNotifier {
 
     if (res.success && res.phoneCodeHash != null) {
       _phoneCodeHash = res.phoneCodeHash!;
+      _deliveryType = res.deliveryType ?? 'app';
       _authStep = 2; // Transition to OTP screen
       _errorMessage = null;
     } else {
       _errorMessage = res.error ?? 'Failed to send verification code. Please try again.';
       // Stay on step 1 so user can retry
+    }
+
+    notifyListeners();
+    return res;
+  }
+
+  Future<TelegramAuthResult> resendOtpCode() async {
+    _isSendingOtp = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    final res = await TelegramAuthService.resendCode(
+      phone: _phoneNumber,
+      phoneCodeHash: _phoneCodeHash,
+    );
+
+    _isSendingOtp = false;
+
+    if (res.success && res.phoneCodeHash != null) {
+      _phoneCodeHash = res.phoneCodeHash!;
+      _deliveryType = res.deliveryType ?? 'sms';
+      _errorMessage = null;
+    } else if (!res.success) {
+      _errorMessage = res.error ?? 'Failed to resend code.';
     }
 
     notifyListeners();
@@ -189,6 +216,8 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(AppConstants.keyUserPhone);
     await prefs.remove(AppConstants.keyIsLoggedIn);
+
+    await TelegramAuthService.reset();
 
     notifyListeners();
   }

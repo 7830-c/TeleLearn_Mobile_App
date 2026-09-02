@@ -79,6 +79,11 @@ class _AppLayoutScaffoldState extends State<AppLayoutScaffold> {
         if (phone.isNotEmpty) {
           context.read<ProgressProvider>().loadProgressMetrics(userPhone: phone);
         }
+      } else if (index == 1) {
+        final phone = context.read<AuthProvider>().phoneNumber;
+        if (phone.isNotEmpty) {
+          context.read<CourseProvider>().loadAvailableChannels(phone: phone);
+        }
       } else if (index == 2) {
         _lastSeenDownloadCount = dlCount;
       } else if (index == 3) {
@@ -392,7 +397,10 @@ class _AppLayoutScaffoldState extends State<AppLayoutScaffold> {
           ),
         ),
       ),
-      body: _pages[_currentIndex],
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _pages,
+      ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: isDark

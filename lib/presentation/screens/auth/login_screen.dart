@@ -74,6 +74,90 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _showTelegramAppGuidanceDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF131D31) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.telegram_rounded, color: Color(0xFF0088CC), size: 28),
+            const SizedBox(width: 10),
+            Text(
+              'Code is in Telegram',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
+                color: isDark ? Colors.white : const Color(0xFF0F172A),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Telegram does not send SMS to registered numbers. Your 5-digit login code was sent directly inside your Telegram app.\n',
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                height: 1.4,
+                color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('1. Open your Telegram app on this phone or PC', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  Text('2. Look for the chat named "Telegram" (with blue verified badge)', style: GoogleFonts.inter(fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text('3. Copy the 5-digit code and enter it here', style: GoogleFonts.inter(fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it, I\'ll check Telegram'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleResendOtp() async {
+    final auth = context.read<AuthProvider>();
+    final res = await auth.resendOtpCode();
+    if (res.success) {
+      if (mounted) {
+        final dest = auth.deliveryType == 'sms' ? 'SMS' : 'Telegram app';
+        ToastUtils.showSnackBar(context, 'New code requested via $dest', isSuccess: true);
+      }
+    } else if (mounted) {
+      if (res.error != null && res.error!.contains('SEND_CODE_UNAVAILABLE')) {
+        _showTelegramAppGuidanceDialog();
+      } else if (res.error != null && res.error!.isNotEmpty) {
+        ToastUtils.showSnackBar(context, res.error!, isError: true);
+      }
+    }
+  }
+
   Future<void> _handleVerify2Fa() async {
     final pass = _passwordController.text;
     final auth = context.read<AuthProvider>();
@@ -419,11 +503,76 @@ class _LoginScreenState extends State<LoginScreen> {
 
                       // ── STEP 2: OTP Verification ─────────────────────────────
                       if (authProvider.authStep == 2) ...[
+                        // Notice Banner: Where did Telegram send the code?
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: authProvider.deliveryType == 'sms'
+                                ? (isDark ? const Color(0xFF064E3B).withValues(alpha: 0.5) : const Color(0xFFECFDF5))
+                                : (isDark ? const Color(0xFF1E3A8A).withValues(alpha: 0.4) : const Color(0xFFEFF6FF)),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: authProvider.deliveryType == 'sms'
+                                  ? (isDark ? const Color(0xFF059669) : const Color(0xFFA7F3D0))
+                                  : (isDark ? const Color(0xFF2563EB) : const Color(0xFFBFDBFE)),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                authProvider.deliveryType == 'sms'
+                                    ? Icons.sms_rounded
+                                    : Icons.telegram_rounded,
+                                color: authProvider.deliveryType == 'sms'
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFF3B82F6),
+                                size: 24,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      authProvider.deliveryType == 'sms'
+                                          ? 'Code sent via SMS'
+                                          : 'Check your Telegram App!',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: authProvider.deliveryType == 'sms'
+                                            ? (isDark ? const Color(0xFF6EE7B7) : const Color(0xFF065F46))
+                                            : (isDark ? const Color(0xFF93C5FD) : const Color(0xFF1E40AF)),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      authProvider.deliveryType == 'sms'
+                                          ? 'Telegram sent the verification code as an SMS to ${authProvider.phoneNumber}. Check your phone Messages app.'
+                                          : 'Telegram does NOT send SMS if you already use Telegram. Open the official Telegram app on your phone to find the code in the "Telegram" service chat.',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 11.5,
+                                        height: 1.4,
+                                        fontWeight: FontWeight.w500,
+                                        color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF334155),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
-                              'TELEGRAM LOGIN CODE',
+                              'ENTER LOGIN CODE',
                               style: GoogleFonts.inter(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
@@ -485,16 +634,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           onSubmitted: (_) => _handleVerifyOtp(),
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Enter the verification code sent to your Telegram app or phone',
-                          textAlign: TextAlign.center,
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            color: textSecondary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
                         const SizedBox(height: 16),
 
                         // Verify & Enter Dashboard Button
@@ -538,15 +677,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                           ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 14),
+
+                        // Secondary action: Resend or Send via SMS
                         Center(
                           child: TextButton.icon(
-                            onPressed: authProvider.isSendingOtp ? null : _handleSendOtp,
-                            icon: const Icon(Icons.refresh_rounded, size: 16),
+                            onPressed: authProvider.isSendingOtp ? null : _handleResendOtp,
+                            icon: Icon(
+                              authProvider.deliveryType == 'app' ? Icons.sms_outlined : Icons.refresh_rounded,
+                              size: 16,
+                            ),
                             label: Text(
-                              authProvider.isSendingOtp ? 'Resending Code...' : 'Resend Code',
+                              authProvider.isSendingOtp
+                                  ? 'Requesting Code...'
+                                  : (authProvider.deliveryType == 'app' ? 'Didn\'t get it? Send via SMS' : 'Resend Code via SMS'),
                               style: GoogleFonts.inter(
-                                fontSize: 12,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),

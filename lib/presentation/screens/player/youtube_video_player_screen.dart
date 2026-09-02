@@ -342,6 +342,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     }
   }
 
+  DateTime _lastBufferUpdateTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   void _onPlayerStateChanged() {
     if (!mounted || _controller == null) return;
 
@@ -350,7 +352,11 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       _isSeeking = false;
     }
     if (val.isBuffering != _isBuffering) {
-      setState(() => _isBuffering = val.isBuffering);
+      final now = DateTime.now();
+      if (now.difference(_lastBufferUpdateTime).inMilliseconds > 250) {
+        _lastBufferUpdateTime = now;
+        setState(() => _isBuffering = val.isBuffering);
+      }
     }
 
     // Auto-save and mark completed ONCE if reached 90%

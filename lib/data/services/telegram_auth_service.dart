@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:t/t.dart' as t;
@@ -15,6 +16,7 @@ class TelegramAuthResult {
   final String? error;
   final int? userId;
   final String? username;
+  final String? deliveryType; // 'app', 'sms', 'call'
 
   TelegramAuthResult({
     required this.success,
@@ -23,24 +25,39 @@ class TelegramAuthResult {
     this.error,
     this.userId,
     this.username,
+    this.deliveryType,
   });
 }
 
 class _IoSocket extends tg.SocketAbstraction {
   _IoSocket(this._rawSocket) {
-    _stream = _rawSocket.asBroadcastStream(
-      onCancel: (sub) => sub.cancel(),
-    ).handleError((e) {
-      debugPrint('[TelegramAuthService Socket notice]: $e');
-    });
+    _rawSocket.listen(
+      (data) {
+        if (!_controller.isClosed) {
+          _controller.add(data);
+        }
+      },
+      onError: (e, st) {
+        debugPrint('[TelegramAuthService Socket notice]: $e');
+        if (!_controller.isClosed) {
+          _controller.addError(e, st);
+        }
+      },
+      onDone: () {
+        if (!_controller.isClosed) {
+          _controller.close();
+        }
+      },
+      cancelOnError: false,
+    );
   }
 
   final Socket _rawSocket;
-  late final Stream<Uint8List> _stream;
+  final StreamController<Uint8List> _controller = StreamController<Uint8List>.broadcast();
   Future<void> _lastSendFuture = Future.value();
 
   @override
-  Stream<Uint8List> get receiver => _stream;
+  Stream<Uint8List> get receiver => _controller.stream;
 
   @override
   Future<void> send(List<int> data) {
@@ -61,14 +78,31 @@ class _IoSocket extends tg.SocketAbstraction {
 
   void destroy() {
     try {
+      if (!_controller.isClosed) {
+        _controller.close();
+      }
       _rawSocket.destroy();
     } catch (_) {}
   }
 }
 
 class TelegramAuthService {
-  static const int apiId = AppConstants.telegramApiId;
-  static const String apiHash = AppConstants.telegramApiHash;
+  static int _credentialIndex = 0;
+
+  static int get apiId {
+    const pool = AppConstants.telegramApiCredentialsPool;
+    return pool[_credentialIndex % pool.length]['apiId'] as int;
+  }
+
+  static String get apiHash {
+    const pool = AppConstants.telegramApiCredentialsPool;
+    return pool[_credentialIndex % pool.length]['apiHash'] as String;
+  }
+
+  static void rotateApiCredentials() {
+    _credentialIndex = (_credentialIndex + 1) % AppConstants.telegramApiCredentialsPool.length;
+    debugPrint('[TelegramAuthService] Switched to Telegram API credentials pair #$_credentialIndex (api_id: $apiId)');
+  }
 
   // Default Telegram Production Data Centers
   static final Map<int, t.DcOption> _dcOptions = {
@@ -135,7 +169,7 @@ class TelegramAuthService {
     2: ['149.154.167.50', '149.154.167.51', '149.154.175.10'],
     3: ['149.154.175.100', '149.154.175.101'],
     4: ['149.154.167.91', '149.154.167.92', '149.154.167.90'],
-    5: ['91.108.56.130', '91.108.56.165', '91.108.56.146', '91.108.56.100'],
+    5: ['91.108.56.165', '91.108.56.130', '91.108.56.146', '91.108.56.100'],
   };
 
 
@@ -199,30 +233,18 @@ class TelegramAuthService {
       debugPrint('[TelegramAuthService] Initiating direct Telegram MTProto session for $cleanPhone on DC $_currentDcId (api_id: $apiId)');
 
       // Get or establish MTProto client on optimal DC
-      final client = await getClient(dcId: _currentDcId);
+      tg.Client client;
+      try {
+        client = await getClient(dcId: _currentDcId);
+      } catch (e) {
+        debugPrint('[TelegramAuthService] Initial connect failed, forcing fresh connection: $e');
+        client = await getClient(dcId: _currentDcId, forceNew: true);
+      }
 
       debugPrint('[TelegramAuthService] Sending MTProto auth.sendCode on DC $_currentDcId...');
-      final sendRes = await client.auth.sendCode(
-        phoneNumber: cleanPhone,
-        apiId: apiId,
-        apiHash: apiHash,
-        settings: const t.CodeSettings(
-          allowFlashcall: false,
-          currentNumber: false,
-          allowAppHash: false,
-          allowMissedCall: false,
-          allowFirebase: false,
-          unknownNumber: false,
-        ),
-      );
-
-      // Handle DC Migration if account is on another Data Center
-      if (sendRes.error != null && _isMigrateError(sendRes.error!.errorMessage)) {
-        final targetDc = _extractDcFromMigrateError(sendRes.error!.errorMessage);
-        debugPrint('[TelegramAuthService] Telegram requires DC migration to DC $targetDc');
-
-        final migratedClient = await getClient(dcId: targetDc, forceNew: true);
-        final migratedRes = await migratedClient.auth.sendCode(
+      t.Result<t.AuthSentCodeBase> sendRes;
+      try {
+        sendRes = await client.auth.sendCode(
           phoneNumber: cleanPhone,
           apiId: apiId,
           apiHash: apiHash,
@@ -235,27 +257,142 @@ class TelegramAuthService {
             unknownNumber: false,
           ),
         );
+      } catch (e) {
+        debugPrint('[TelegramAuthService] sendCode socket/client error ($e), retrying with fresh client...');
+        client = await getClient(dcId: _currentDcId, forceNew: true);
+        sendRes = await client.auth.sendCode(
+          phoneNumber: cleanPhone,
+          apiId: apiId,
+          apiHash: apiHash,
+          settings: const t.CodeSettings(
+            allowFlashcall: false,
+            currentNumber: false,
+            allowAppHash: false,
+            allowMissedCall: false,
+            allowFirebase: false,
+            unknownNumber: false,
+          ),
+        );
+      }
 
-        return _processSendCodeResult(migratedRes, cleanPhone);
+      if (sendRes.error != null) {
+        final err = sendRes.error!.errorMessage;
+        // Handle dead / expired auth key on existing session
+        if (err.contains('AUTH_KEY_UNREGISTERED') ||
+            err.contains('AUTH_KEY_INVALID') ||
+            err.contains('SESSION_REVOKED') ||
+            err.contains('SESSION_EXPIRED')) {
+          debugPrint('[TelegramAuthService] AuthKey invalid on sendCode ($err), establishing fresh auth key...');
+          client = await getClient(dcId: _currentDcId, forceNew: true);
+          sendRes = await client.auth.sendCode(
+            phoneNumber: cleanPhone,
+            apiId: apiId,
+            apiHash: apiHash,
+            settings: const t.CodeSettings(
+              allowFlashcall: false,
+              currentNumber: false,
+              allowAppHash: false,
+              allowMissedCall: false,
+              allowFirebase: false,
+              unknownNumber: false,
+            ),
+          );
+        }
+
+        // Handle API_ID errors by rotating credentials pool automatically
+        if (err.contains('API_ID_INVALID') || err.contains('API_ID_PUBLISHED_FLOOD')) {
+          debugPrint('[TelegramAuthService] API ID invalid ($err), rotating to fallback Telegram API credentials...');
+          rotateApiCredentials();
+          final freshClient = await getClient(dcId: _currentDcId, forceNew: true);
+          final retryRes = await freshClient.auth.sendCode(
+            phoneNumber: cleanPhone,
+            apiId: apiId,
+            apiHash: apiHash,
+            settings: const t.CodeSettings(
+              allowFlashcall: false,
+              currentNumber: false,
+              allowAppHash: false,
+              allowMissedCall: false,
+              allowFirebase: false,
+              unknownNumber: false,
+            ),
+          );
+          return _processSendCodeResult(retryRes, cleanPhone);
+        }
+
+        // Handle DC Migration if account is on another Data Center
+        if (_isMigrateError(sendRes.error!.errorMessage)) {
+          final targetDc = _extractDcFromMigrateError(sendRes.error!.errorMessage);
+          debugPrint('[TelegramAuthService] Telegram requires DC migration to DC $targetDc');
+          _currentDcId = targetDc;
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setInt('tg_last_dc', targetDc);
+          } catch (_) {}
+
+          final migratedClient = await getClient(dcId: targetDc, forceNew: true);
+          final migratedRes = await migratedClient.auth.sendCode(
+            phoneNumber: cleanPhone,
+            apiId: apiId,
+            apiHash: apiHash,
+            settings: const t.CodeSettings(
+              allowFlashcall: false,
+              currentNumber: false,
+              allowAppHash: false,
+              allowMissedCall: false,
+              allowFirebase: false,
+              unknownNumber: false,
+            ),
+          );
+
+          return _processSendCodeResult(migratedRes, cleanPhone);
+        }
       }
 
       return _processSendCodeResult(sendRes, cleanPhone);
     } catch (e) {
-      debugPrint('[TelegramAuthService] MTProto sendCode exception: $e');
-      return TelegramAuthResult(
-        success: false,
-        error: _mapErrorMessage(e.toString()),
-      );
+      debugPrint('[TelegramAuthService] MTProto sendCode exception ($e), attempting credentials rotation...');
+      try {
+        rotateApiCredentials();
+        final freshClient = await getClient(dcId: _currentDcId, forceNew: true);
+        final retryRes = await freshClient.auth.sendCode(
+          phoneNumber: cleanPhone,
+          apiId: apiId,
+          apiHash: apiHash,
+          settings: const t.CodeSettings(
+            allowFlashcall: false,
+            currentNumber: false,
+            allowAppHash: false,
+            allowMissedCall: false,
+            allowFirebase: false,
+            unknownNumber: false,
+          ),
+        );
+        return _processSendCodeResult(retryRes, cleanPhone);
+      } catch (retryErr) {
+        debugPrint('[TelegramAuthService] Failover retry error: $retryErr');
+        return TelegramAuthResult(
+          success: false,
+          error: _mapErrorMessage(e.toString()),
+        );
+      }
     }
   }
 
   static TelegramAuthResult _processSendCodeResult(t.Result<t.AuthSentCodeBase> res, String phone) {
     if (res.result is t.AuthSentCode) {
       final sentCode = res.result as t.AuthSentCode;
-      debugPrint('[TelegramAuthService] OTP successfully sent by Telegram! Hash: ${sentCode.phoneCodeHash}');
+      String delivery = 'app';
+      if (sentCode.type is t.AuthSentCodeTypeSms || sentCode.type is t.AuthSentCodeTypeFragmentSms) {
+        delivery = 'sms';
+      } else if (sentCode.type is t.AuthSentCodeTypeCall || sentCode.type is t.AuthSentCodeTypeFlashCall || sentCode.type is t.AuthSentCodeTypeMissedCall) {
+        delivery = 'call';
+      }
+      debugPrint('[TelegramAuthService] OTP successfully sent by Telegram! Delivery: $delivery, Hash: ${sentCode.phoneCodeHash}');
       return TelegramAuthResult(
         success: true,
         phoneCodeHash: sentCode.phoneCodeHash,
+        deliveryType: delivery,
       );
     }
 
@@ -271,6 +408,25 @@ class TelegramAuthService {
       success: false,
       error: 'Failed to send verification code. Please check your number and try again.',
     );
+  }
+
+  /// Resend verification code via Telegram (requests SMS fallback)
+  static Future<TelegramAuthResult> resendCode({
+    required String phone,
+    required String phoneCodeHash,
+  }) async {
+    final cleanPhone = _normalizePhone(phone);
+    try {
+      final client = await getClient(dcId: _currentDcId);
+      final res = await client.auth.resendCode(
+        phoneNumber: cleanPhone,
+        phoneCodeHash: phoneCodeHash,
+      );
+      return _processSendCodeResult(res, cleanPhone);
+    } catch (e) {
+      debugPrint('[TelegramAuthService] resendCode error: $e');
+      return TelegramAuthResult(success: false, error: _mapRpcError(e.toString()));
+    }
   }
 
   /// Verify verification code directly via Telegram MTProto API
@@ -331,7 +487,10 @@ class TelegramAuthService {
         username = u.username ?? u.firstName;
       }
 
-      debugPrint('[TelegramAuthService] Successfully logged in! User: $userId ($username)');
+      debugPrint('[TelegramAuthService] Successfully logged in! User: $userId ($username) on DC $_currentDcId');
+      try {
+        SharedPreferences.getInstance().then((prefs) => prefs.setInt('tg_last_dc', _currentDcId));
+      } catch (_) {}
       return TelegramAuthResult(
         success: true,
         userId: userId ?? phone.hashCode.abs(),
@@ -402,16 +561,20 @@ class TelegramAuthService {
   static final Map<int, tg.Client> _clientsByDc = {};
   static final Map<int, Future<tg.Client>> _clientFuturesByDc = {};
   static final Map<int, _IoSocket> _socketsByDc = {};
+  static final Set<int> _authorizedDcs = {};
+  static final Map<int, int> _docDcMap = {};
   static int _currentDcId = 2;
+  static bool _dcLoadedFromPrefs = false;
 
   static Future<int> getMasterDcId() async {
+    if (_dcLoadedFromPrefs) return _currentDcId;
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedDc = prefs.getInt('tg_last_dc');
       if (savedDc != null && savedDc >= 1 && savedDc <= 5) {
         _currentDcId = savedDc;
-        return savedDc;
       }
+      _dcLoadedFromPrefs = true;
     } catch (_) {}
     return _currentDcId;
   }
@@ -425,53 +588,74 @@ class TelegramAuthService {
     required int offset,
     required int limit,
   }) async {
-    try {
-      final masterDc = await getMasterDcId();
-      final targetDc = (dcId >= 1 && dcId <= 5) ? dcId : masterDc;
-      final client = await getClient(dcId: targetDc);
-      final location = t.InputDocumentFileLocation(
-        id: docId,
-        accessHash: accessHash,
-        fileReference: fileReference,
-        thumbSize: '',
-      );
+    final masterDc = await getMasterDcId();
+    final cachedDocDc = _docDcMap[docId];
+    final targetDc = (cachedDocDc != null && cachedDocDc >= 1 && cachedDocDc <= 5)
+        ? cachedDocDc
+        : ((dcId >= 1 && dcId <= 5) ? dcId : masterDc);
 
-      final res = await client.upload.getFile(
-        precise: true,
-        cdnSupported: false,
-        location: location,
-        offset: offset,
-        limit: limit,
-      );
+    final location = t.InputDocumentFileLocation(
+      id: docId,
+      accessHash: accessHash,
+      fileReference: fileReference,
+      thumbSize: '',
+    );
 
-      if (res.result is t.UploadFile) {
-        final uploadFile = res.result as t.UploadFile;
-        return Uint8List.fromList(uploadFile.bytes);
-      }
+    for (int attempt = 0; attempt < 2; attempt++) {
+      try {
+        final client = await getClient(dcId: targetDc, forceNew: attempt > 0);
+        final res = await client.upload.getFile(
+          precise: true,
+          cdnSupported: false,
+          location: location,
+          offset: offset,
+          limit: limit,
+        ).timeout(const Duration(seconds: 25));
 
-      if (res.error != null) {
-        final err = res.error!.errorMessage;
-        debugPrint('[TelegramAuthService] getFile error on DC $targetDc: ${res.error!.errorCode} - $err');
-
-        if (_isMigrateError(err)) {
-          final migratedDc = _extractDcFromMigrateError(err);
-          debugPrint('[TelegramAuthService] File requires migration to DC $migratedDc');
-          return downloadFileChunk(
-            dcId: migratedDc,
-            docId: docId,
-            accessHash: accessHash,
-            fileReference: fileReference,
-            offset: offset,
-            limit: limit,
-          );
+        if (res.result is t.UploadFile) {
+          final uploadFile = res.result as t.UploadFile;
+          return Uint8List.fromList(uploadFile.bytes);
         }
+
+        if (res.error != null) {
+          final err = res.error!.errorMessage;
+          debugPrint('[TelegramAuthService] getFile error on DC $targetDc: ${res.error!.errorCode} - $err');
+          if (_isMigrateError(err)) {
+            final migratedDc = _extractDcFromMigrateError(err);
+            debugPrint('[TelegramAuthService] 🔄 File requires migration to DC $migratedDc for doc $docId');
+            _docDcMap[docId] = migratedDc;
+            return downloadFileChunk(
+              dcId: migratedDc,
+              docId: docId,
+              accessHash: accessHash,
+              fileReference: fileReference,
+              offset: offset,
+              limit: limit,
+            );
+          }
+          if (err.contains('AUTH_KEY_UNREGISTERED') ||
+              err.contains('AUTH_KEY_INVALID') ||
+              err.contains('SESSION_REVOKED') ||
+              err.contains('SESSION_EXPIRED')) {
+            debugPrint('[TelegramAuthService] AuthKey invalid on DC $targetDc, clearing key');
+            _clientsByDc.remove(targetDc);
+            _socketsByDc.remove(targetDc)?.destroy();
+            _socketsByDc.remove(targetDc);
+            _authorizedDcs.remove(targetDc);
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('tg_auth_key_dc_$targetDc');
+            } catch (_) {}
+          }
+        }
+      } catch (e) {
+        debugPrint('[TelegramAuthService] downloadFileChunk attempt $attempt note on DC $targetDc: $e');
+        // Close broken socket so next attempt gets a fresh connection,
+        // but KEEP cached authKey so we avoid expensive DH key computation on UI thread
+        _clientsByDc.remove(targetDc);
+        _socketsByDc.remove(targetDc)?.destroy();
+        _socketsByDc.remove(targetDc);
       }
-    } catch (e) {
-      debugPrint('[TelegramAuthService] downloadFileChunk exception: $e');
-      final masterDc = await getMasterDcId();
-      final targetDc = (dcId >= 1 && dcId <= 5) ? dcId : masterDc;
-      _clientsByDc.remove(targetDc);
-      _socketsByDc.remove(targetDc)?.destroy();
     }
     return null;
   }
@@ -481,13 +665,13 @@ class TelegramAuthService {
     final masterDc = await getMasterDcId();
     final targetDc = dcId ?? masterDc;
 
-    if (!forceNew) {
-      if (_clientsByDc.containsKey(targetDc)) {
-        return _clientsByDc[targetDc]!;
-      }
-      if (_clientFuturesByDc.containsKey(targetDc)) {
-        return await _clientFuturesByDc[targetDc]!;
-      }
+    if (!forceNew && _clientsByDc.containsKey(targetDc)) {
+      return _clientsByDc[targetDc]!;
+    }
+
+    // Deduplicate all in-flight connection requests for the same DC to prevent DH handshake CPU storms
+    if (_clientFuturesByDc.containsKey(targetDc)) {
+      return await _clientFuturesByDc[targetDc]!;
     }
 
     final future = _doConnectClient(targetDc: targetDc, masterDc: masterDc, forceNew: forceNew);
@@ -501,45 +685,100 @@ class TelegramAuthService {
     }
   }
 
+  /// Blazing-fast parallel socket racer (Happy Eyeballs / RFC 8305)
+  /// Concurrently probes candidate endpoints to connect within 150-300ms without sequential blocking
+  static Future<Socket> _connectFastSocket(int targetDc, int masterDc) async {
+    final dc = _dcOptions[targetDc] ?? _dcOptions[2]!;
+    final candidateIps = _dcIps[targetDc] ?? [dc.ipAddress];
+
+    final completer = Completer<Socket>();
+
+    void handleSuccess(Socket s, String ip, int port) {
+      if (!completer.isCompleted) {
+        debugPrint('[TelegramAuthService] ⚡ Fast TCP connected to DC $targetDc via $ip:$port');
+        completer.complete(s);
+      } else {
+        try {
+          s.destroy();
+        } catch (_) {}
+      }
+    }
+
+    // Launch concurrent parallel connection attempts on HTTPS 443
+    for (final ip in candidateIps) {
+      Socket.connect(ip, 443, timeout: const Duration(milliseconds: 2500)).then((s) {
+        handleSuccess(s, ip, 443);
+      }).catchError((e) {
+        // If 443 fails for this IP, try HTTP port 80 as fallback
+        Socket.connect(ip, 80, timeout: const Duration(milliseconds: 2000)).then((s) {
+          handleSuccess(s, ip, 80);
+        }).catchError((_) {});
+      });
+    }
+
+    try {
+      return await completer.future.timeout(const Duration(milliseconds: 3500));
+    } catch (_) {
+      debugPrint('[TelegramAuthService] Fallback direct connect to primary DC $targetDc endpoint...');
+      return await Socket.connect(dc.ipAddress, dc.port, timeout: const Duration(seconds: 3));
+    }
+  }
+
+  static final Map<int, tg.AuthorizationKey> _authKeysByDc = {};
+
+  static Future<tg.AuthorizationKey> _authorizeInIsolate(int targetDc, String ip, int port) async {
+    final jsonMap = await Isolate.run<Map<String, dynamic>>(() async {
+      final rawSocket = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
+      final socket = _IoSocket(rawSocket);
+      final obfuscation = tg.Obfuscation.random(false, targetDc);
+      final idGenerator = tg.MessageIdGenerator();
+      await socket.send(obfuscation.preamble);
+      final key = await tg.Client.authorize(socket, obfuscation, idGenerator);
+      socket.destroy();
+      return key.toJson();
+    });
+    return tg.AuthorizationKey.fromJson(jsonMap);
+  }
+
   static Future<tg.Client> _doConnectClient({
     required int targetDc,
     required int masterDc,
     required bool forceNew,
   }) async {
-    // Close previous socket for this specific DC if forcing new
-    if (forceNew && _socketsByDc.containsKey(targetDc)) {
-      _socketsByDc[targetDc]?.destroy();
-      _socketsByDc.remove(targetDc);
+    // Close previous socket if forcing new connection, but NEVER purge the auth key!
+    if (forceNew) {
+      if (_socketsByDc.containsKey(targetDc)) {
+        _socketsByDc[targetDc]?.destroy();
+        _socketsByDc.remove(targetDc);
+      }
       _clientsByDc.remove(targetDc);
     }
 
-    final dc = _dcOptions[targetDc] ?? _dcOptions[2]!;
-    final candidateIps = _dcIps[targetDc] ?? [dc.ipAddress];
-    final candidatePorts = [443, 80, 5222];
+    // Check for cached AuthKey for this DC
+    tg.AuthorizationKey? authKey;
+    if (!forceNew) {
+      authKey = await _loadCachedAuthKey(targetDc);
+    }
 
-    Socket? rawSocket;
-    Object? lastErr;
+    if (authKey == null) {
+      debugPrint('[TelegramAuthService] 🚀 Running MTProto DH exchange in background isolate for DC $targetDc (zero UI lag)...');
+      final dc = _dcOptions[targetDc] ?? _dcOptions[2]!;
+      final candidateIps = _dcIps[targetDc] ?? [dc.ipAddress];
+      final connectIp = candidateIps.first;
 
-    for (final ip in candidateIps) {
-      for (final port in candidatePorts) {
-        try {
-          debugPrint('[TelegramAuthService] Connecting to DC $targetDc at $ip:$port (master: $masterDc)...');
-          rawSocket = await Socket.connect(
-            ip,
-            port,
-            timeout: const Duration(seconds: 4),
-          );
-          break;
-        } catch (e) {
-          lastErr = e;
-        }
+      try {
+        authKey = await _authorizeInIsolate(targetDc, connectIp, 443);
+      } catch (e) {
+        debugPrint('[TelegramAuthService] Background DH on 443 note ($e), trying primary endpoint...');
+        authKey = await _authorizeInIsolate(targetDc, dc.ipAddress, dc.port);
       }
-      if (rawSocket != null) break;
+      await _saveCachedAuthKey(targetDc, authKey);
+      debugPrint('[TelegramAuthService] ✅ New AuthKey established for DC $targetDc: ${authKey.id}');
+    } else {
+      debugPrint('[TelegramAuthService] Reusing cached AuthKey for DC $targetDc: ${authKey.id}');
     }
 
-    if (rawSocket == null) {
-      throw Exception('Failed to connect to Telegram DC $targetDc across all endpoints: $lastErr');
-    }
+    final rawSocket = await _connectFastSocket(targetDc, masterDc);
 
     final socket = _IoSocket(rawSocket);
     _socketsByDc[targetDc] = socket;
@@ -549,22 +788,6 @@ class TelegramAuthService {
 
     await socket.send(obfuscation.preamble);
 
-    // Check for cached AuthKey for this DC
-    tg.AuthorizationKey? authKey = await _loadCachedAuthKey(targetDc);
-
-    if (authKey == null) {
-      debugPrint('[TelegramAuthService] Performing MTProto DH exchange for DC $targetDc...');
-      authKey = await tg.Client.authorize(
-        socket,
-        obfuscation,
-        idGenerator,
-      );
-      await _saveCachedAuthKey(targetDc, authKey);
-      debugPrint('[TelegramAuthService] New AuthKey established for DC $targetDc: ${authKey.id}');
-    } else {
-      debugPrint('[TelegramAuthService] Reusing cached AuthKey for DC $targetDc: ${authKey.id}');
-    }
-
     final client = tg.Client(
       socket: socket,
       obfuscation: obfuscation,
@@ -572,46 +795,49 @@ class TelegramAuthService {
       idGenerator: idGenerator,
     );
 
-    try {
-      final cfg = await client.initConnection<t.Config>(
-        apiId: apiId,
-        deviceModel: 'TeleLearn App',
-        systemVersion: 'Android 14',
-        appVersion: '1.0.0',
-        systemLangCode: 'en',
-        langPack: '',
-        langCode: 'en',
-        query: const t.HelpGetConfig(),
-      );
+    if (targetDc == masterDc) {
+      try {
+        final cfg = await client.initConnection<t.Config>(
+          apiId: apiId,
+          deviceModel: 'TeleLearn App',
+          systemVersion: 'Android 14',
+          appVersion: '1.0.0',
+          systemLangCode: 'en',
+          langPack: '',
+          langCode: 'en',
+          query: const t.HelpGetConfig(),
+        ).timeout(const Duration(seconds: 10));
 
-      if (cfg.result != null) {
-        for (final item in cfg.result!.dcOptions) {
-          if (item is t.DcOption && !item.ipv6 && !item.mediaOnly && !item.cdn) {
-            _dcOptions.putIfAbsent(item.id, () => item);
+        if (cfg.result != null) {
+          for (final item in cfg.result!.dcOptions) {
+            if (item is t.DcOption && !item.ipv6 && !item.mediaOnly && !item.cdn) {
+              _dcOptions.putIfAbsent(item.id, () => item);
+            }
           }
         }
+      } catch (e) {
+        debugPrint('[TelegramAuthService] initConnection note: $e');
       }
-    } catch (e) {
-      debugPrint('[TelegramAuthService] initConnection note: $e');
     }
 
     _clientsByDc[targetDc] = client;
 
-    // If connecting to a secondary DC while user is authenticated on master DC, transfer authorization
-    if (targetDc != masterDc) {
+    // Transfer auth to secondary DC if target is different from Master DC (Parity with Telethon)
+    if (targetDc != masterDc && !_authorizedDcs.contains(targetDc)) {
       try {
-        final masterClient = await getClient(dcId: masterDc);
-        final exported = await masterClient.auth.exportAuthorization(dcId: targetDc);
+        final masterClient = _clientsByDc[masterDc] ?? await getClient(dcId: masterDc);
+        final exported = await masterClient.auth.exportAuthorization(dcId: targetDc).timeout(const Duration(seconds: 15));
         if (exported.result is t.AuthExportedAuthorization) {
           final exp = exported.result as t.AuthExportedAuthorization;
-          await client.auth.importAuthorization(
+          final impRes = await client.auth.importAuthorization(
             id: exp.id,
             bytes: Uint8List.fromList(exp.bytes),
-          );
-          debugPrint('[TelegramAuthService] Auth exported from master DC $masterDc to target DC $targetDc');
+          ).timeout(const Duration(seconds: 15));
+          _authorizedDcs.add(targetDc);
+          debugPrint('[TelegramAuthService] 🔑 Successfully exported & imported auth from Master DC $masterDc to Target DC $targetDc: ${impRes.result}');
         }
       } catch (e) {
-        debugPrint('[TelegramAuthService] Export auth note: $e');
+        debugPrint('[TelegramAuthService] Export/Import auth note: $e');
       }
     }
 
@@ -619,12 +845,17 @@ class TelegramAuthService {
   }
 
   static Future<tg.AuthorizationKey?> _loadCachedAuthKey(int dcId) async {
+    if (_authKeysByDc.containsKey(dcId)) {
+      return _authKeysByDc[dcId];
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       final keyJson = prefs.getString('tg_auth_key_dc_$dcId');
       if (keyJson != null && keyJson.isNotEmpty) {
         final map = jsonDecode(keyJson) as Map<String, dynamic>;
-        return tg.AuthorizationKey.fromJson(map);
+        final ak = tg.AuthorizationKey.fromJson(map);
+        _authKeysByDc[dcId] = ak;
+        return ak;
       }
     } catch (e) {
       debugPrint('[TelegramAuthService] Failed to load cached auth key: $e');
@@ -633,13 +864,40 @@ class TelegramAuthService {
   }
 
   static Future<void> _saveCachedAuthKey(int dcId, tg.AuthorizationKey authKey) async {
+    _authKeysByDc[dcId] = authKey;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('tg_auth_key_dc_$dcId', jsonEncode(authKey.toJson()));
       await prefs.setInt('tg_last_dc', dcId);
+      _currentDcId = dcId;
+      _dcLoadedFromPrefs = true;
     } catch (e) {
       debugPrint('[TelegramAuthService] Failed to save cached auth key: $e');
     }
+  }
+
+  /// Reset all MTProto socket connections, cached clients, and stored auth keys
+  static Future<void> reset() async {
+    for (final s in _socketsByDc.values) {
+      try {
+        s.destroy();
+      } catch (_) {}
+    }
+    _socketsByDc.clear();
+    _clientsByDc.clear();
+    _clientFuturesByDc.clear();
+    _authorizedDcs.clear();
+    _docDcMap.clear();
+    _authKeysByDc.clear();
+    _dcLoadedFromPrefs = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (int i = 1; i <= 5; i++) {
+        await prefs.remove('tg_auth_key_dc_$i');
+      }
+      await prefs.remove('tg_last_dc');
+    } catch (_) {}
+    debugPrint('[TelegramAuthService] All MTProto connections and auth keys successfully reset');
   }
 
   static bool isMigrateError(String error) {
@@ -651,9 +909,7 @@ class TelegramAuthService {
   }
 
   static bool _isMigrateError(String error) {
-    return error.startsWith('PHONE_MIGRATE_') ||
-        error.startsWith('NETWORK_MIGRATE_') ||
-        error.startsWith('USER_MIGRATE_');
+    return error.contains('MIGRATE_');
   }
 
   static int _extractDcFromMigrateError(String error) {
@@ -690,6 +946,9 @@ class TelegramAuthService {
     if (rpcError.startsWith('FLOOD_WAIT_')) {
       final seconds = rpcError.replaceFirst('FLOOD_WAIT_', '');
       return 'Too many login attempts. Please wait $seconds seconds before trying again.';
+    }
+    if (rpcError.contains('SEND_CODE_UNAVAILABLE')) {
+      return 'SMS delivery is unavailable. Telegram has sent the code directly to your Telegram app. Please open Telegram and check the "Telegram" notification chat.';
     }
     if (rpcError.contains('API_ID_INVALID')) {
       return 'Telegram API ID or Hash is invalid.';

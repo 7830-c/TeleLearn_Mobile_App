@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../data/local_db/app_database.dart';
 import '../data/models/course_model.dart';
 import '../data/models/download_model.dart';
+import '../data/services/local_streaming_server.dart';
 
 class DownloadTask {
   final String courseId;
@@ -242,6 +243,10 @@ class DownloadProvider extends ChangeNotifier {
         throw Exception('No stream URL available for this lesson');
       }
 
+      if (LocalStreamingServer.instance.isRunning) {
+        remoteUrl = LocalStreamingServer.instance.getProxiedStreamUrl(remoteUrl);
+      }
+
       // Preserve /courses/stream/ endpoint with quality=high (Enables exact Range byte-resume & 512KB MTProto pipe)
       if (!remoteUrl.contains('quality=')) {
         remoteUrl += remoteUrl.contains('?') ? '&quality=high' : '?quality=high';
@@ -352,7 +357,10 @@ class DownloadProvider extends ChangeNotifier {
       final candidateUrls = <String>[];
 
       if (note?.fileUrl != null && note!.fileUrl!.isNotEmpty) {
-        final urlStr = note.fileUrl!;
+        var urlStr = note.fileUrl!;
+        if (LocalStreamingServer.instance.isRunning) {
+          urlStr = LocalStreamingServer.instance.getProxiedStreamUrl(urlStr);
+        }
         candidateUrls.add(urlStr);
         if (urlStr.contains('/download/')) {
           final sanitized = urlStr.replaceAll(task.userPhone, cleanPhone);
@@ -638,26 +646,35 @@ class DownloadProvider extends ChangeNotifier {
       'Connection': 'keep-alive',
     };
 
-    // Discover total file size via a small Range probe if unknown
+    // Discover total file size via url parameters or small Range probe if unknown
     if (totalBytes <= 0) {
-      try {
-        final probeClient = http.Client();
-        final probeReq = http.Request('GET', uri);
-        probeReq.headers.addAll(browserHeaders);
-        probeReq.headers['range'] = 'bytes=0-0';
-        final probeRes = await probeClient.send(probeReq).timeout(const Duration(seconds: 10));
-        if (probeRes.statusCode == 206) {
-          final contentRange = probeRes.headers['content-range'] ?? '';
-          final totalMatch = RegExp(r'/(\d+)').firstMatch(contentRange);
-          if (totalMatch != null) {
-            totalBytes = int.parse(totalMatch.group(1)!);
-          }
-        } else if (probeRes.statusCode == 200 && (probeRes.contentLength ?? 0) > 0) {
-          totalBytes = probeRes.contentLength!;
+      if (uri.queryParameters.containsKey('size')) {
+        final qSize = int.tryParse(uri.queryParameters['size'] ?? '');
+        if (qSize != null && qSize > 0) {
+          totalBytes = qSize;
         }
-        await probeRes.stream.drain();
-        probeClient.close();
-      } catch (_) {}
+      }
+
+      if (totalBytes <= 0) {
+        try {
+          final probeClient = http.Client();
+          final probeReq = http.Request('GET', uri);
+          probeReq.headers.addAll(browserHeaders);
+          probeReq.headers['range'] = 'bytes=0-0';
+          final probeRes = await probeClient.send(probeReq).timeout(const Duration(seconds: 10));
+          if (probeRes.statusCode == 206) {
+            final contentRange = probeRes.headers['content-range'] ?? '';
+            final totalMatch = RegExp(r'/(\d+)').firstMatch(contentRange);
+            if (totalMatch != null) {
+              totalBytes = int.parse(totalMatch.group(1)!);
+            }
+          } else if (probeRes.statusCode == 200 && (probeRes.contentLength ?? 0) > 0) {
+            totalBytes = probeRes.contentLength!;
+          }
+          await probeRes.stream.drain();
+          probeClient.close();
+        } catch (_) {}
+      }
     }
     if (totalBytes > 0) {
       task.totalBytes = totalBytes;
@@ -829,7 +846,7 @@ class DownloadProvider extends ChangeNotifier {
           req.headers['range'] = 'bytes=$existingBytes-';
         }
 
-        final response = await client.send(req).timeout(const Duration(seconds: 25));
+        final response = await client.send(req).timeout(const Duration(seconds: 45));
         if (response.statusCode >= 400 && response.statusCode != 416) {
           throw Exception('Server returned HTTP ${response.statusCode}');
         }

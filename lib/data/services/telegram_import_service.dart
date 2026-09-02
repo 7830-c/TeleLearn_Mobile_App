@@ -38,8 +38,8 @@ class TelegramChannelInfo {
 }
 
 class TelegramImportService {
-  static const int apiId = AppConstants.telegramApiId;
-  static const String apiHash = AppConstants.telegramApiHash;
+  static int get apiId => TelegramAuthService.apiId;
+  static String get apiHash => TelegramAuthService.apiHash;
 
   static final Map<int, int> _channelAccessHashMap = {};
 
@@ -64,7 +64,7 @@ class TelegramImportService {
         offsetPeer: const t.InputPeerEmpty(),
         limit: 100,
         hash: 0,
-      );
+      ).timeout(const Duration(seconds: 25));
 
       if (res.error != null) {
         final err = res.error!.errorMessage;
@@ -72,7 +72,7 @@ class TelegramImportService {
         if (TelegramAuthService.isMigrateError(err)) {
           final targetDc = TelegramAuthService.extractDcFromMigrateError(err);
           debugPrint('[TelegramImportService] Migrating to DC $targetDc for getDialogs...');
-          final migratedClient = await TelegramAuthService.getClient(dcId: targetDc, forceNew: true);
+          final migratedClient = await TelegramAuthService.getClient(dcId: targetDc);
           final retryRes = await migratedClient.messages.getDialogs(
             excludePinned: false,
             folderId: null,
@@ -81,17 +81,21 @@ class TelegramImportService {
             offsetPeer: const t.InputPeerEmpty(),
             limit: 100,
             hash: 0,
-          );
+          ).timeout(const Duration(seconds: 25));
           return _parseDialogsResult(retryRes);
+        } else if (err.contains('AUTH_KEY_UNREGISTERED') ||
+            err.contains('AUTH_KEY_INVALID') ||
+            err.contains('SESSION_REVOKED')) {
+          debugPrint('[TelegramImportService] User Telegram session is expired / not authorized ($err)');
+          return [];
         }
       }
 
       return _parseDialogsResult(res);
     } catch (e) {
-      debugPrint('[TelegramImportService] MTProto dialogs fetch exception: $e');
+      debugPrint('[TelegramImportService] MTProto dialogs note: $e');
+      return [];
     }
-
-    return [];
   }
 
   static List<TelegramChannelInfo> _parseDialogsResult(t.Result<t.MessagesDialogsBase> res) {
@@ -262,7 +266,7 @@ class TelegramImportService {
       final List<t.MessageBase> allRawMessages = [];
       int offsetId = 0;
       const int batchLimit = 100;
-      const int maxMessagesToFetch = 8000;
+      const int maxMessagesToFetch = 4000;
 
       // 2. Fetch message history with non-blocking streaming
       while (allRawMessages.length < maxMessagesToFetch) {
@@ -324,6 +328,9 @@ class TelegramImportService {
           }
         }
 
+        // Yield to Flutter main thread so UI animations remain smooth and prevent Android ANR
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
         if (batch.length < batchLimit) break;
 
         int minId = 0x7FFFFFFF;
@@ -354,6 +361,10 @@ class TelegramImportService {
       final Map<int, Map<String, dynamic>> modulesDict = {};
 
       for (int i = 0; i < messages.length; i++) {
+        if (i % 60 == 0) {
+          // Yield to UI isolate every 60 items
+          await Future<void>.delayed(Duration.zero);
+        }
         final msg = messages[i];
         if (msg.media == null) continue;
 
