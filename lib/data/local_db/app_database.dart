@@ -281,9 +281,21 @@ class AppDatabase {
     final db = await database;
     final now = DateTime.now();
 
-    final bool completed = isCompleted ?? (durationSeconds > 0 && (progressSeconds / durationSeconds >= 0.90));
-
     await db.transaction((txn) async {
+      final bool completed;
+      if (isCompleted != null) {
+        completed = isCompleted;
+      } else {
+        final existing = await txn.query(
+          'progress',
+          columns: ['is_completed'],
+          where: 'user_phone = ? AND course_id = ? AND lesson_id = ?',
+          whereArgs: [userPhone, courseId, lessonId],
+        );
+        final wasCompleted = existing.isNotEmpty && existing.first['is_completed'] == 1;
+        completed = wasCompleted || (durationSeconds > 0 && (progressSeconds / durationSeconds >= 0.90));
+      }
+
       await txn.insert(
         'progress',
         {

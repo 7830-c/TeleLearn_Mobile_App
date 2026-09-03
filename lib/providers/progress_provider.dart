@@ -134,7 +134,8 @@ class ProgressProvider extends ChangeNotifier {
     // Optimistic local update
     final currentList = List<LessonProgress>.from(_courseProgressMap[courseId] ?? []);
     final existingIdx = currentList.indexWhere((p) => p.lessonId == lessonId);
-    final isDone = isCompleted ?? (durationSeconds > 0 && progressSeconds >= durationSeconds * 0.9);
+    final existingItem = existingIdx >= 0 ? currentList[existingIdx] : null;
+    final isDone = isCompleted ?? ((existingItem?.isCompleted ?? false) || (durationSeconds > 0 && progressSeconds >= durationSeconds * 0.9));
     final updatedItem = LessonProgress(
       courseId: courseId,
       lessonId: lessonId,
@@ -184,7 +185,8 @@ class ProgressProvider extends ChangeNotifier {
     // Optimistic local update (single notifyListeners)
     final currentList = List<LessonProgress>.from(_courseProgressMap[courseId] ?? []);
     final existingIdx = currentList.indexWhere((p) => p.lessonId == lessonId);
-    final isDone = isCompleted ?? (durationSeconds > 0 && progressSeconds >= durationSeconds * 0.9);
+    final existingItem = existingIdx >= 0 ? currentList[existingIdx] : null;
+    final isDone = isCompleted ?? ((existingItem?.isCompleted ?? false) || (durationSeconds > 0 && progressSeconds >= durationSeconds * 0.9));
     final updatedItem = LessonProgress(
       courseId: courseId,
       lessonId: lessonId,

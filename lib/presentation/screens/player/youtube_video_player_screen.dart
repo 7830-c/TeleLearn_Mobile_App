@@ -786,7 +786,6 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     final isDark = theme.brightness == Brightness.dark;
 
     final course = context.read<CourseProvider>().getCourse(_currentCourseId);
-    final progressProvider = context.read<ProgressProvider>();
     final authProvider = context.read<AuthProvider>();
 
     if (course == null) {
@@ -957,10 +956,6 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     // Sub-Module Progress calculations
     final moduleLessons = currentModule?.lessons ?? [];
     final totalModuleLessonsCount = moduleLessons.length;
-    final completedModuleLessonsCount = moduleLessons.where((l) => progressProvider.isLessonCompleted(_currentCourseId, l.id)).length;
-    final moduleCompletionPct = totalModuleLessonsCount > 0
-        ? ((completedModuleLessonsCount / totalModuleLessonsCount) * 100).toInt()
-        : 0;
 
     return PopScope(
       canPop: false,
@@ -1920,53 +1915,62 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                       // Tab 1: Course Playlist Queue
                       if (_activeDrawerTab == 0) ...[
                         // ── Sub-Module Progress Header Banner (Web Parity) ──
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.6) : AppColors.primaryLight.withValues(alpha: 0.4),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Consumer<ProgressProvider>(
+                          builder: (context, pp, _) {
+                            final completedCount = moduleLessons.where((l) => pp.isLessonCompleted(_currentCourseId, l.id)).length;
+                            final completionPct = totalModuleLessonsCount > 0
+                                ? ((completedCount / totalModuleLessonsCount) * 100).toInt()
+                                : 0;
+
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.6) : AppColors.primaryLight.withValues(alpha: 0.4),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Module Progress',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: isDark ? Colors.white : const Color(0xFF0F172A),
-                                    ),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        'Module Progress',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                                        ),
+                                      ),
+                                      Text(
+                                        '$completedCount / $totalModuleLessonsCount ($completionPct%)',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.primary,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  Text(
-                                    '$completedModuleLessonsCount / $totalModuleLessonsCount ($moduleCompletionPct%)',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.primary,
+                                  const SizedBox(height: 6),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: totalModuleLessonsCount > 0
+                                          ? completedCount / totalModuleLessonsCount
+                                          : 0.0,
+                                      backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                      valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                                      minHeight: 6,
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 6),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: LinearProgressIndicator(
-                                  value: totalModuleLessonsCount > 0
-                                      ? completedModuleLessonsCount / totalModuleLessonsCount
-                                      : 0.0,
-                                  backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                  valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                                  minHeight: 6,
-                                ),
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
                         const SizedBox(height: 12),
                       ],
@@ -1984,10 +1988,13 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                     itemBuilder: (context, idx) {
                       final l = currentModule!.lessons[idx];
                       final isCurrent = l.id == _currentLessonId;
-                      final isDone = progressProvider.isLessonCompleted(_currentCourseId, l.id);
-                      final isLastWatched = progressProvider.continueWatching?.lessonId == l.id;
-                      final progressPct = progressProvider.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
-                      final progressFrac = progressProvider.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
+
+                      return Consumer<ProgressProvider>(
+                        builder: (context, pp, _) {
+                          final isDone = pp.isLessonCompleted(_currentCourseId, l.id);
+                          final isLastWatched = pp.continueWatching?.lessonId == l.id;
+                          final progressPct = pp.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
+                          final progressFrac = pp.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
 
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8),
@@ -2114,6 +2121,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         ),
                       );
                     },
+                  );
+                },
                   ),
                 )
               else if ((currentModule?.notes.isEmpty ?? true))
