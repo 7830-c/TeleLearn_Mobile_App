@@ -134,20 +134,35 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   }
 
   bool _isAppBackgrounded = false;
+  Timer? _backgroundPauseTimer;
+  bool _wasPlayingBeforeBackground = false;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused) {
       _isAppBackgrounded = true;
+      _wasPlayingBeforeBackground = _controller?.value.isPlaying ?? false;
       _saveCurrentProgress();
-      _controller?.pause();
+      // Grace period (2.5 seconds): allows scrolling down quick settings / control panel
+      // without prematurely pausing playback. Only pauses if the app is truly minimized.
+      _backgroundPauseTimer?.cancel();
+      _backgroundPauseTimer = Timer(const Duration(milliseconds: 2500), () {
+        if (mounted && _isAppBackgrounded) {
+          _controller?.pause();
+        }
+      });
     } else if (state == AppLifecycleState.resumed) {
       _isAppBackgrounded = false;
+      _backgroundPauseTimer?.cancel();
+      if (_wasPlayingBeforeBackground && _controller != null && _controller!.value.isInitialized) {
+        _controller?.play();
+      }
     }
   }
 
   @override
   void deactivate() {
+    _backgroundPauseTimer?.cancel();
     _saveCurrentProgress();
     _controller?.pause();
     LocalStreamingServer.abortPreviousStreams();
@@ -159,6 +174,7 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     _playerInitSession++;
     LocalStreamingServer.abortPreviousStreams();
     WidgetsBinding.instance.removeObserver(this);
+    _backgroundPauseTimer?.cancel();
     _controlsTimer?.cancel();
     _progressSaveTimer?.cancel();
     _hudDismissTimer?.cancel();
@@ -501,13 +517,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   bool _isLandscapeLeft = true;
 
   void _flipLandscapeOrientation() {
+    final wasPlaying = _controller?.value.isPlaying ?? false;
     _isLandscapeLeft = !_isLandscapeLeft;
     SystemChrome.setPreferredOrientations([
       _isLandscapeLeft ? DeviceOrientation.landscapeLeft : DeviceOrientation.landscapeRight,
     ]);
+    if (wasPlaying) {
+      _controller?.play();
+    }
   }
 
   void _toggleFullscreen() {
+    final wasPlaying = _controller?.value.isPlaying ?? false;
+    final isInitialized = _controller?.value.isInitialized ?? false;
+
     setState(() {
       _isFullscreen = !_isFullscreen;
     });
@@ -524,6 +547,25 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
     _resetControlsTimer();
+
+    // 🚀 Seamless continuous playback / autoplay across fullscreen & portrait switch
+    if (isInitialized && (wasPlaying || !_isInitialStandby)) {
+      _controller?.play();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controller != null && _controller!.value.isInitialized && !_isAppBackgrounded) {
+          if (!_controller!.value.isPlaying) {
+            _controller!.play();
+          }
+        }
+      });
+      Future.delayed(const Duration(milliseconds: 250), () {
+        if (mounted && _controller != null && _controller!.value.isInitialized && !_isAppBackgrounded) {
+          if (!_controller!.value.isPlaying) {
+            _controller!.play();
+          }
+        }
+      });
+    }
   }
 
   void _setPlaybackSpeed(double speed) {
