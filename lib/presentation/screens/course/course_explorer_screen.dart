@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
@@ -32,6 +33,8 @@ class CourseExplorerScreen extends StatefulWidget {
 class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
   int? _activeModuleId;
   int _activeTab = 0; // 0 = Video Lessons, 1 = Notes & Documents
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -40,6 +43,12 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ProgressProvider>().loadCourseProgress(widget.courseId);
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _showRenameDialog(CourseModule module) {
@@ -165,7 +174,6 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
 
     final courseProvider = context.watch<CourseProvider>();
     final progressProvider = context.watch<ProgressProvider>();
-    final bookmarkProvider = context.watch<BookmarkProvider>();
     final downloadProvider = context.watch<DownloadProvider>();
     final authProvider = context.read<AuthProvider>();
 
@@ -203,7 +211,11 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         if (_activeModuleId != null) {
-          setState(() => _activeModuleId = null);
+          _searchController.clear();
+          setState(() {
+            _activeModuleId = null;
+            _searchQuery = '';
+          });
         }
       },
       child: Scaffold(
@@ -213,7 +225,11 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
             if (_activeModuleId != null) {
-              setState(() => _activeModuleId = null);
+              _searchController.clear();
+              setState(() {
+                _activeModuleId = null;
+                _searchQuery = '';
+              });
             } else {
               Navigator.pop(context);
             }
@@ -403,142 +419,318 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
 
           // View 1: Module Grid / List
           if (currentModule == null) ...[
-            Text(
-              'COURSE MODULES (${course.modules.length})',
-              style: GoogleFonts.inter(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.5,
-                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-              ),
-            ),
-            const SizedBox(height: 12),
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: course.modules.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, idx) {
-                final mod = course.modules[idx];
-                final completedCount = mod.lessons.where((l) =>
-                    progressProvider.isLessonCompleted(course.id, l.id)).length;
-                final completionPct = mod.lessons.isNotEmpty
-                    ? ((completedCount / mod.lessons.length) * 100).toInt()
-                    : 0;
-
-                return Container(
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF131D31) : Colors.white,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'COURSE MODULES (${course.modules.length})',
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
+                ),
+                if (course.modules.any((m) => m.isPinned))
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.push_pin_rounded, size: 12, color: AppColors.primary),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Pinned at top',
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
                       ),
                     ],
                   ),
-                  child: Material(
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(18),
-                    child: InkWell(
-                      onTap: () => setState(() => _activeModuleId = mod.id),
-                      borderRadius: BorderRadius.circular(18),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Container(
-                                  width: 38,
-                                  height: 38,
-                                  decoration: BoxDecoration(
-                                    color: isDark
-                                        ? AppColors.primary.withValues(alpha: 0.2)
-                                        : AppColors.primaryLight.withValues(alpha: 0.6),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: const Icon(Icons.folder_open_rounded, color: AppColors.primary, size: 20),
-                                ),
-                                if (completionPct > 0)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: completionPct == 100
-                                          ? const Color(0xFF059669).withValues(alpha: 0.15)
-                                          : AppColors.primary.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      completionPct == 100 ? 'Completed' : '$completionPct%',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        color: completionPct == 100 ? AppColors.accentEmerald : AppColors.primary,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              mod.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.inter(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: isDark ? Colors.white : const Color(0xFF0F172A),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            const Divider(),
-                            const SizedBox(height: 6),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            // Search Bar for Modules
+            Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF131D31) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
+                ),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                style: GoogleFonts.inter(fontSize: 13, color: isDark ? Colors.white : const Color(0xFF0F172A)),
+                decoration: InputDecoration(
+                  hintText: 'Search modules or topics...',
+                  hintStyle: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                  ),
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppColors.primary),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        )
+                      : null,
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            Builder(
+              builder: (context) {
+                final sortedModules = List<CourseModule>.from(course.modules)
+                  ..sort((a, b) {
+                    if (a.isPinned && !b.isPinned) return -1;
+                    if (!a.isPinned && b.isPinned) return 1;
+                    return a.id.compareTo(b.id);
+                  });
+
+                final displayedModules = _searchQuery.isEmpty
+                    ? sortedModules
+                    : sortedModules
+                        .where((m) => m.title.toLowerCase().contains(_searchQuery.toLowerCase()))
+                        .toList();
+
+                if (displayedModules.isEmpty) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.search_off_rounded,
+                          size: 40,
+                          color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'No modules match "$_searchQuery"',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: displayedModules.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, idx) {
+                    final mod = displayedModules[idx];
+                    final completedCount = mod.lessons.where((l) =>
+                        progressProvider.isLessonCompleted(course.id, l.id)).length;
+                    final completionPct = mod.lessons.isNotEmpty
+                        ? ((completedCount / mod.lessons.length) * 100).toInt()
+                        : 0;
+
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF131D31) : Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: mod.isPinned
+                              ? AppColors.primary
+                              : (isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0)),
+                          width: mod.isPinned ? 1.5 : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: mod.isPinned
+                                ? AppColors.primary.withValues(alpha: isDark ? 0.25 : 0.12)
+                                : Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
+                            blurRadius: mod.isPinned ? 8 : 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                        child: InkWell(
+                          onTap: () {
+                            _searchController.clear();
+                            setState(() {
+                              _activeModuleId = mod.id;
+                              _searchQuery = '';
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(18),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    const Icon(Icons.play_circle_outline, size: 14, color: AppColors.primary),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '${mod.lessons.length} Lessons',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.primary,
-                                      ),
-                                    ),
-                                    if (mod.notes.isNotEmpty) ...[
-                                      const SizedBox(width: 12),
-                                      Icon(Icons.description_outlined,
-                                          size: 14,
-                                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        '${mod.notes.length} Notes',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 11,
-                                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 38,
+                                          height: 38,
+                                          decoration: BoxDecoration(
+                                            color: isDark
+                                                ? AppColors.primary.withValues(alpha: mod.isPinned ? 0.28 : 0.18)
+                                                : (mod.isPinned
+                                                    ? AppColors.primaryLight.withValues(alpha: 0.9)
+                                                    : AppColors.primaryLight.withValues(alpha: 0.6)),
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: Icon(
+                                            mod.isPinned ? Icons.push_pin_rounded : Icons.folder_open_rounded,
+                                            color: AppColors.primary,
+                                            size: 20,
+                                          ),
                                         ),
-                                      ),
-                                    ],
+                                        if (mod.isPinned) ...[
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                                            decoration: BoxDecoration(
+                                              color: AppColors.primary.withValues(alpha: isDark ? 0.2 : 0.12),
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: AppColors.primary.withValues(alpha: isDark ? 0.45 : 0.35)),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                const Icon(Icons.push_pin_rounded, size: 10, color: AppColors.primary),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  'Pinned',
+                                                  style: GoogleFonts.inter(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: AppColors.primary,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    Row(
+                                      children: [
+                                        if (completionPct > 0) ...[
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: completionPct == 100
+                                                  ? const Color(0xFF059669).withValues(alpha: 0.15)
+                                                  : AppColors.primary.withValues(alpha: 0.15),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: Text(
+                                              completionPct == 100 ? 'Completed' : '$completionPct%',
+                                              style: GoogleFonts.inter(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w700,
+                                                color: completionPct == 100 ? AppColors.accentEmerald : AppColors.primary,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                        ],
+                                        // Pin / Unpin button
+                                        IconButton(
+                                          icon: Icon(
+                                            mod.isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+                                            color: mod.isPinned
+                                                ? AppColors.primary
+                                                : (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
+                                            size: 20,
+                                          ),
+                                          tooltip: mod.isPinned ? 'Unpin module' : 'Pin module to top',
+                                          onPressed: () async {
+                                            HapticFeedback.lightImpact();
+                                            await courseProvider.togglePinModule(course.id, mod.id);
+                                            if (context.mounted) {
+                                              ToastUtils.showSnackBar(
+                                                context,
+                                                mod.isPinned ? 'Module unpinned' : '📌 Module pinned to top!',
+                                                isSuccess: true,
+                                              );
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
-                                const Icon(Icons.chevron_right, size: 18, color: AppColors.primary),
+                                const SizedBox(height: 12),
+                                Text(
+                                  mod.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                const Divider(),
+                                const SizedBox(height: 6),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.play_circle_outline, size: 14, color: AppColors.primary),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '${mod.lessons.length} Lessons',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.primary,
+                                          ),
+                                        ),
+                                        if (mod.notes.isNotEmpty) ...[
+                                          const SizedBox(width: 12),
+                                          Icon(Icons.description_outlined,
+                                              size: 14,
+                                              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${mod.notes.length} Notes',
+                                            style: GoogleFonts.inter(
+                                              fontSize: 11,
+                                              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    const Icon(Icons.chevron_right, size: 18, color: AppColors.primary),
+                                  ],
+                                ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 );
               },
             ),
@@ -618,32 +810,78 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            // Search Bar for Lessons & Notes in Current Module
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF131D31) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
+                ),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                style: GoogleFonts.inter(fontSize: 13, color: isDark ? Colors.white : const Color(0xFF0F172A)),
+                decoration: InputDecoration(
+                  hintText: _activeTab == 0 ? 'Search lessons in this module...' : 'Search notes & PDFs...',
+                  hintStyle: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                  ),
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppColors.primary),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        )
+                      : null,
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+              ),
+            ),
 
             // Tab Content 1: Video Lessons
             if (_activeTab == 0) ...[
-              if (currentModule.lessons.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(32),
-                  alignment: Alignment.center,
-                  child: Text(
-                    'No video lessons found in this module.',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                    ),
-                  ),
-                )
-              else
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: currentModule.lessons.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final lesson = currentModule.lessons[index];
+              Builder(
+                builder: (context) {
+                  final displayedLessons = _searchQuery.isEmpty
+                      ? currentModule.lessons
+                      : currentModule.lessons
+                          .where((l) =>
+                              l.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+                              (l.summary?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false))
+                          .toList();
+
+                  if (displayedLessons.isEmpty) {
+                    return Container(
+                      padding: const EdgeInsets.all(32),
+                      alignment: Alignment.center,
+                      child: Text(
+                        _searchQuery.isNotEmpty
+                            ? 'No video lessons match "$_searchQuery".'
+                            : 'No video lessons found in this module.',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                        ),
+                      ),
+                    );
+                  }
+
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: displayedLessons.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final lesson = displayedLessons[index];
                     final isCompleted = progressProvider.isLessonCompleted(course.id, lesson.id);
-                    final isBookmarked = bookmarkProvider.isBookmarked(lesson.id);
                     final savedSec = progressProvider.getLessonProgressSeconds(course.id, lesson.id);
                     final lastWatchedId = progressProvider.getLastWatchedLessonId(course.id);
                     final isLastWatched = (lesson.id == lastWatchedId);
@@ -880,23 +1118,30 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
                                         }
                                       },
                                     ),
-
                                     // Bookmark Toggle Button
-                                    IconButton(
-                                      icon: Icon(
-                                        isBookmarked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                                        color: isBookmarked
-                                            ? AppColors.primary
-                                            : (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
-                                        size: 20,
-                                      ),
-                                      onPressed: () {
-                                        bookmarkProvider.toggleBookmark(
-                                          courseId: course.id,
-                                          lessonId: lesson.id,
-                                          title: lesson.title,
-                                          courseTitle: course.title,
-                                          duration: lesson.duration,
+                                    Consumer<BookmarkProvider>(
+                                      builder: (ctx, bp, _) {
+                                        final isBm = bp.isBookmarked(lesson.id);
+                                        return IconButton(
+                                          icon: Icon(
+                                            isBm ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                                            color: isBm
+                                                ? AppColors.primary
+                                                : (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
+                                            size: 20,
+                                          ),
+                                          tooltip: isBm ? 'Bookmarked' : 'Bookmark lesson',
+                                          onPressed: () {
+                                            HapticFeedback.lightImpact();
+                                            bp.toggleBookmark(
+                                              courseId: course.id,
+                                              lessonId: lesson.id,
+                                              title: lesson.title,
+                                              courseTitle: course.title,
+                                              duration: lesson.duration,
+                                              userPhone: authProvider.phoneNumber,
+                                            );
+                                          },
                                         );
                                       },
                                     ),
@@ -910,29 +1155,44 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
                     ),
                   );
                   },
-                ),
+                );
+              },
+            ),
             ] else ...[
               // Tab Content 2: Notes & Documents
-              if (currentModule.notes.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(32),
-                  alignment: Alignment.center,
-                  child: Text(
-                    'No study notes or documents in this module.',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                    ),
-                  ),
-                )
-              else
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: currentModule.notes.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final note = currentModule.notes[index];
+              Builder(
+                builder: (context) {
+                  final displayedNotes = _searchQuery.isEmpty
+                      ? currentModule.notes
+                      : currentModule.notes
+                          .where((n) =>
+                              (n.displayName.toLowerCase().contains(_searchQuery.toLowerCase())) ||
+                              (n.text?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false))
+                          .toList();
+
+                  if (displayedNotes.isEmpty) {
+                    return Container(
+                      padding: const EdgeInsets.all(32),
+                      alignment: Alignment.center,
+                      child: Text(
+                        _searchQuery.isNotEmpty
+                            ? 'No notes match "$_searchQuery".'
+                            : 'No study notes or documents in this module.',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                        ),
+                      ),
+                    );
+                  }
+
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: displayedNotes.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final note = displayedNotes[index];
                     return Container(
                       decoration: BoxDecoration(
                         color: isDark ? const Color(0xFF131D31) : Colors.white,
@@ -1054,9 +1314,11 @@ class _CourseExplorerScreenState extends State<CourseExplorerScreen> {
                 ),
               );
             },
-          ),
-            ],
-          ],
+          );
+        },
+      ),
+    ],
+  ],
           const SizedBox(height: 40),
         ],
       ),

@@ -254,6 +254,20 @@ class AppDatabase {
     await updateCourse(course);
   }
 
+  Future<void> toggleModulePinned(String courseId, int moduleId) async {
+    final course = await getCourseById(courseId);
+    if (course == null) return;
+
+    for (final mod in course.modules) {
+      if (mod.id == moduleId) {
+        mod.isPinned = !mod.isPinned;
+        break;
+      }
+    }
+
+    await updateCourse(course);
+  }
+
   // ── Progress & Study Analytics ─────────────────────────────────
   Future<void> saveLessonProgress({
     required String courseId,

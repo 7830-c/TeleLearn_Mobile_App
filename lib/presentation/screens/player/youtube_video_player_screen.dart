@@ -787,7 +787,6 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
     final course = context.read<CourseProvider>().getCourse(_currentCourseId);
     final progressProvider = context.read<ProgressProvider>();
-    final bookmarkProvider = context.read<BookmarkProvider>();
     final authProvider = context.read<AuthProvider>();
 
     if (course == null) {
@@ -816,8 +815,6 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
         }
       }
     }
-    final isBookmarked = bookmarkProvider.isBookmarked(_currentLessonId);
-    final isCompleted = progressProvider.isLessonCompleted(_currentCourseId, _currentLessonId);
 
     // Calculate Aspect Ratio Widget with Pinch-to-Zoom
     Widget videoWidget;
@@ -1587,30 +1584,35 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                if (isCompleted)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF059669).withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: const Color(0xFF059669).withValues(alpha: 0.3)),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(Icons.check_circle_rounded, size: 12, color: Color(0xFF059669)),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          'Finished',
-                                          style: GoogleFonts.inter(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w700,
-                                            color: const Color(0xFF059669),
+                                Consumer<ProgressProvider>(
+                                  builder: (context, pp, _) {
+                                    final isDone = pp.isLessonCompleted(_currentCourseId, _currentLessonId);
+                                    if (!isDone) return const SizedBox.shrink();
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF059669).withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: const Color(0xFF059669).withValues(alpha: 0.3)),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.check_circle_rounded, size: 12, color: Color(0xFF059669)),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Finished',
+                                            style: GoogleFonts.inter(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w700,
+                                              color: const Color(0xFF059669),
+                                            ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                               ],
                             ),
                             const SizedBox(height: 8),
@@ -1632,113 +1634,120 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                             ),
                             const SizedBox(height: 14),
 
-                            // ── 3 Action Buttons in 1 Row (Web Parity: Mark Done, Save, Download) ──
-                            Row(
-                              children: [
-                                // 1. Mark Done / Finished Button
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    onPressed: () {
-                                      if (currentLesson != null) {
-                                        final authPhone = context.read<AuthProvider>().phoneNumber;
-                                        final dur = (totalDurationMs / 1000).toInt();
-                                        final effectiveDur = dur > 0 ? dur : (currentLesson.duration?.toInt() ?? 60);
-                                        progressProvider.toggleLessonCompleted(
-                                          courseId: course.id,
-                                          lessonId: currentLesson.id,
-                                          durationSeconds: effectiveDur > 0 ? effectiveDur : 60,
-                                          userPhone: authPhone,
-                                        );
-                                        setState(() {});
-                                        ToastUtils.showSnackBar(
-                                          context,
-                                          !isCompleted ? 'Marked as completed!' : 'Marked as uncompleted',
-                                          isSuccess: !isCompleted,
-                                        );
-                                      }
-                                    },
-                                    icon: Icon(
-                                      isCompleted ? Icons.check_circle_rounded : Icons.check_circle_outline_rounded,
-                                      size: 16,
-                                    ),
-                                    label: Text(
-                                      isCompleted ? 'Finished' : 'Mark Done',
-                                      style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: isCompleted
-                                          ? const Color(0xFF059669)
-                                          : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
-                                      foregroundColor: isCompleted
-                                          ? Colors.white
-                                          : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                      elevation: 0,
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(
-                                          color: isCompleted
+                            // ── 3 Action Buttons in 1 Row (Mark Done, Save, Download) ──
+                            Consumer2<BookmarkProvider, ProgressProvider>(
+                              builder: (context, bp, pp, _) {
+                                final isBm = bp.isBookmarked(_currentLessonId);
+                                final isDone = pp.isLessonCompleted(_currentCourseId, _currentLessonId);
+
+                                return Row(
+                                  children: [
+                                    // 1. Mark Done / Finished Button (Instant Single-Click)
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () {
+                                          HapticFeedback.lightImpact();
+                                          if (currentLesson != null) {
+                                            final authPhone = context.read<AuthProvider>().phoneNumber;
+                                            final dur = (totalDurationMs / 1000).toInt();
+                                            final effectiveDur = dur > 0 ? dur : (currentLesson.duration?.toInt() ?? 60);
+                                            pp.toggleLessonCompleted(
+                                              courseId: course.id,
+                                              lessonId: currentLesson.id,
+                                              durationSeconds: effectiveDur > 0 ? effectiveDur : 60,
+                                              userPhone: authPhone,
+                                            );
+                                            ToastUtils.showSnackBar(
+                                              context,
+                                              !isDone ? 'Marked as completed!' : 'Marked as uncompleted',
+                                              isSuccess: !isDone,
+                                            );
+                                          }
+                                        },
+                                        icon: Icon(
+                                          isDone ? Icons.check_circle_rounded : Icons.check_circle_outline_rounded,
+                                          size: 16,
+                                        ),
+                                        label: Text(
+                                          isDone ? 'Finished' : 'Mark Done',
+                                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: isDone
                                               ? const Color(0xFF059669)
-                                              : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                              : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
+                                          foregroundColor: isDone
+                                              ? Colors.white
+                                              : (isDark ? Colors.white : const Color(0xFF0F172A)),
+                                          elevation: 0,
+                                          padding: const EdgeInsets.symmetric(vertical: 10),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                            side: BorderSide(
+                                              color: isDone
+                                                  ? const Color(0xFF059669)
+                                                  : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
+                                    const SizedBox(width: 8),
 
-                                // 2. Bookmark / Save Button
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    onPressed: () {
-                                      if (currentLesson != null) {
-                                        bookmarkProvider.toggleBookmark(
-                                          courseId: course.id,
-                                          lessonId: currentLesson.id,
-                                          title: currentLesson.title,
-                                          courseTitle: course.title,
-                                          duration: currentLesson.duration,
-                                        );
-                                        ToastUtils.showSnackBar(
-                                          context,
-                                          isBookmarked ? 'Removed from bookmarks' : 'Added to bookmarks',
-                                          isSuccess: !isBookmarked,
-                                        );
-                                      }
-                                    },
-                                    icon: Icon(
-                                      isBookmarked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                                      size: 16,
-                                    ),
-                                    label: Text(
-                                      isBookmarked ? 'Saved' : 'Bookmark',
-                                      style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: isBookmarked
-                                          ? AppColors.primary
-                                          : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
-                                      foregroundColor: isBookmarked
-                                          ? Colors.white
-                                          : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                      elevation: 0,
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(
-                                          color: isBookmarked
+                                    // 2. Bookmark / Save Button (Instant Single-Click)
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () {
+                                          HapticFeedback.lightImpact();
+                                          if (currentLesson != null) {
+                                            bp.toggleBookmark(
+                                              courseId: course.id,
+                                              lessonId: currentLesson.id,
+                                              title: currentLesson.title,
+                                              courseTitle: course.title,
+                                              duration: currentLesson.duration,
+                                              userPhone: context.read<AuthProvider>().phoneNumber,
+                                            );
+                                            ToastUtils.showSnackBar(
+                                              context,
+                                              isBm ? 'Removed from bookmarks' : 'Added to bookmarks',
+                                              isSuccess: !isBm,
+                                            );
+                                          }
+                                        },
+                                        icon: Icon(
+                                          isBm ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                                          size: 16,
+                                        ),
+                                        label: Text(
+                                          isBm ? 'Saved' : 'Bookmark',
+                                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: isBm
                                               ? AppColors.primary
-                                              : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                              : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
+                                          foregroundColor: isBm
+                                              ? Colors.white
+                                              : (isDark ? Colors.white : const Color(0xFF0F172A)),
+                                          elevation: 0,
+                                          padding: const EdgeInsets.symmetric(vertical: 10),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                            side: BorderSide(
+                                              color: isBm
+                                                  ? AppColors.primary
+                                                  : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
+                                    const SizedBox(width: 8),
 
-                                // 3. Download Button
-                                Expanded(
-                                  child: Consumer<DownloadProvider>(
+                                    // 3. Download Button
+                                    Expanded(
+                                      child: Consumer<DownloadProvider>(
                                     builder: (ctx, dlProvider, _) {
                                       final task = dlProvider.getTask(course.id, _currentLessonId, 'video');
                                       final isDownloaded = dlProvider.isDownloaded(course.id, _currentLessonId, 'video');
@@ -1823,7 +1832,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                   ),
                                 ),
                               ],
-                            ),
+                            );
+                          },
+                        ),
                           ],
                         ),
                       ),

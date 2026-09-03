@@ -112,6 +112,24 @@ class CourseProvider extends ChangeNotifier {
     await loadCourses(userPhone: _activeUserPhone);
   }
 
+  Future<void> togglePinModule(String courseId, int moduleId) async {
+    // 1. Optimistic in-memory update
+    final course = getCourse(courseId);
+    if (course != null) {
+      for (final m in course.modules) {
+        if (m.id == moduleId) {
+          m.isPinned = !m.isPinned;
+          break;
+        }
+      }
+      notifyListeners();
+    }
+
+    // 2. Persist to SQLite
+    await AppDatabase.instance.toggleModulePinned(courseId, moduleId);
+    await loadCourses(userPhone: _activeUserPhone);
+  }
+
   Future<void> deleteCourse(String courseId) async {
     _courses.removeWhere((c) => c.id == courseId);
     notifyListeners();

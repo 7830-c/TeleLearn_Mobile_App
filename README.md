@@ -2,17 +2,40 @@
 
 > Pure client-side, high-performance video learning application that directly transforms any Telegram Channel or Forum into a structured, distraction-free educational experience with offline study, ultra-smooth 60 FPS playback, and resilient downloads. **Requires zero external backend servers.**
 
+[![Version](https://img.shields.io/badge/Version-1.1.1%2B3-2563EB.svg?style=flat&logo=flutter)](pubspec.yaml)
 [![Flutter](https://img.shields.io/badge/Flutter-3.24+-02569B.svg?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.5+-0175C2.svg?logo=dart&logoColor=white)](https://dart.dev)
 [![Android](https://img.shields.io/badge/Android-10_to_15-3DDC84.svg?logo=android&logoColor=white)](https://developer.android.com)
 [![ExoPlayer](https://img.shields.io/badge/Player-ExoPlayer_Native-FF6F00.svg?logo=googleplay&logoColor=white)](https://developer.android.com/media/media3/exoplayer)
 [![SQLite](https://img.shields.io/badge/Database-SQLite_sqflite-003B57.svg?logo=sqlite&logoColor=white)](https://sqlite.org)
-[![Architecture](https://img.shields.io/badge/Architecture-Pure_Local_MTProto-22C55E.svg)](https://telegram.org)
+[![OTA Updates](https://img.shields.io/badge/OTA-GitHub_Releases-181717.svg?logo=github&logoColor=white)](https://github.com/7830-c/TeleLearn_Mobile_App)
 [![Build](https://img.shields.io/badge/APK-ARM64--v8a_Optimized-2563EB.svg)](file:///d:/Projects/TeleLearn/App/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)
 
 ---
 
 ## ✨ Key Features & Highlights
+
+### 🔍 Course Module & Lesson Search
+- **Module Grid/List Search**: Quickly filter courses and sub-modules by topic or title with instantaneous results.
+- **Deep Lesson & Note Search**: Search inside any module in real time across **Video Lessons** (title & summary) and **Notes & PDFs** (filename & text content).
+- **Zero-Friction State**: Search queries reset automatically when switching between modules for a seamless study flow.
+
+### 📌 Submodule Pinning
+- **Top-Anchored Priority**: Pin important modules to keep them anchored at the very top of your modules list.
+- **App-Theme Blue Aesthetics**: Clean, polished styling with royal blue (`#2563EB`) borders, pin icons, and `📌 Pinned` badges matching TeleLearn's signature theme.
+- **Persistent Local SQLite Storage**: Pinned states are saved permanently in SQLite and reload automatically on app restarts.
+- **Tactile Haptic Feedback**: Tapping pin/unpin gives an instant, satisfying vibration response and confirmation snackbar.
+
+### ⚡ 0ms Single-Click Action Buttons
+- **Instant Response**: "Bookmark" and "Mark Done" buttons respond instantly on a single click with reactive `Consumer2` listeners.
+- **Tactile Haptic Feedback**: Every button press triggers a light tactile vibration (`HapticFeedback.lightImpact()`) for physical confirmation.
+- **Zero Stale State**: Both the action buttons and the video header status badges update simultaneously in real time.
+
+### 🔄 In-App Self-Updating System (GitHub Releases OTA)
+- **Automatic Background Checks**: Checks for updates once every 24 hours with zero unnecessary network calls or battery drain.
+- **Manual "Check for Updates"**: Dedicated update checker inside the User Profile menu.
+- **Live In-App Downloader**: Beautiful update modal displaying version comparison, GitHub release notes, file size, and a live MB / percentage progress bar.
+- **Automatic Package Installer**: Automatically launches the Android native package installer once the APK download completes.
 
 ### 🎬 Ultra-Smooth 60–120 FPS Video Player
 - **🚀 Dedicated Background Isolate AES-IGE Decryption (`TelegramChunkWorker`)**: Runs computationally heavy pure-Dart AES-IGE-256 decryption off the main thread in a persistent background worker isolate. Flutter's UI thread stays at 0% streaming load and renders at a locked 60–120 FPS with buttery soft touch controls.
@@ -81,6 +104,7 @@ graph TD
 | **Local Proxy Server** | `dart:io` `HttpServer` (`127.0.0.1:8765`) | In-app byte-range streaming & lookahead pipeline |
 | **State Management** | `provider` | Reactive, decoupled state synchronization |
 | **Local Database** | `sqflite` + `path_provider` | Persistent offline progress, bookmarks & downloads |
+| **App Updater** | `package_info_plus` + `open_filex` | GitHub Releases OTA checking, streaming APKs & native install |
 | **Typography** | `google_fonts` | Inter & Roboto Mono typeface rendering |
 | **Security** | `flutter_secure_storage` | Secure encrypted credential and session storage |
 
@@ -97,14 +121,14 @@ App/
 │   ├── data/
 │   │   ├── local_db/          # SQLite database schema, migrations & study metrics
 │   │   ├── models/            # Course, Lesson, Module, Bookmark & Download models
-│   │   └── services/          # LocalStreamingServer, TelegramAuthService & ImportService
+│   │   └── services/          # LocalStreamingServer, TelegramAuthService, ImportService & AppUpdateService
 │   ├── presentation/
 │   │   ├── screens/
 │   │   │   ├── auth/          # Telegram phone login & OTP verification screen
-│   │   │   ├── course/        # Course explorer, channel browser & syllabus view
+│   │   │   ├── course/        # Course explorer with search, submodule pinning & syllabus view
 │   │   │   ├── dashboard/     # Home dashboard, streak tracker & continue watching
 │   │   │   ├── downloads/     # Active download progress, speeds, ETAs & offline shelf
-│   │   │   ├── player/        # Fullscreen YouTube/Cinema video player with HUDs
+│   │   │   ├── player/        # Fullscreen YouTube/Cinema video player with HUDs & instant actions
 │   │   │   └── bookmarks/     # Saved lessons and study materials shelf
 │   │   └── widgets/           # Reusable UI cards, badges, dialogs & app layouts
 │   ├── providers/             # AuthProvider, CourseProvider, DownloadProvider, ProgressProvider

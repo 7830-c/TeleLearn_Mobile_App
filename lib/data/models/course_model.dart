@@ -104,12 +104,14 @@ class CourseModule {
   String title;
   final List<CourseLesson> lessons;
   final List<CourseNote> notes;
+  bool isPinned;
 
   CourseModule({
     required this.id,
     required this.title,
     required this.lessons,
     required this.notes,
+    this.isPinned = false,
   });
 
   num get totalDurationSeconds =>
@@ -121,6 +123,7 @@ class CourseModule {
       'title': title,
       'lessons': lessons.map((l) => l.toMap()).toList(),
       'notes': notes.map((n) => n.toMap()).toList(),
+      'is_pinned': isPinned,
     };
   }
 
@@ -134,6 +137,23 @@ class CourseModule {
       notes: (map['notes'] as List? ?? [])
           .map((n) => CourseNote.fromMap(n as Map<String, dynamic>))
           .toList(),
+      isPinned: map['is_pinned'] == true || map['is_pinned'] == 1,
+    );
+  }
+
+  CourseModule copyWith({
+    int? id,
+    String? title,
+    List<CourseLesson>? lessons,
+    List<CourseNote>? notes,
+    bool? isPinned,
+  }) {
+    return CourseModule(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      lessons: lessons ?? this.lessons,
+      notes: notes ?? this.notes,
+      isPinned: isPinned ?? this.isPinned,
     );
   }
 }
