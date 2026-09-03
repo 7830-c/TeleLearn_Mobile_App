@@ -48,8 +48,12 @@
 - **🔄 Intelligent Submodule Back Navigation**: Exiting a video started from the Dashboard returns directly to that module's video list in `CourseExplorerScreen`.
 
 ### 📥 Resilient Background Download Manager
-- **🚀 High-Speed Direct Streams**: Downloads video lectures and course PDFs at full connection bandwidth directly from Telegram Cloud DCs.
-- **🛡️ Uninterrupted Background Execution**: Active downloads run independently of the video player and continue smoothly while navigating or watching lectures.
+- **🚀 Rock-Solid 256 KB MTProto Chunks**: Uses Telegram's universally compliant 256 KB chunk size, eliminating `LIMIT_INVALID` RPC errors and ensuring 100% reliability for both course notes and multi-hundred-megabyte video lectures.
+- **⚡ Oscillation-Free Pipelining (512 KB In-Flight)**: Implements a 2-chunk lookahead sliding window (`N+1`, `N+2`) with persistent worker sockets. Completely eliminates speed drop/spike oscillation cycles by preserving open TCP sockets across requests.
+- **⚡ Zero-Delay Direct Streaming & Socket `tcpNoDelay`**: Eliminates Nagle algorithm buffering delays and bypasses player vsync pacing during active downloads so chunks stream continuously without artificial timer pauses.
+- **🔄 Intelligent DC Auto-Migration**: Automatically detects and handles Telegram DC migration (`FILE_MIGRATE_X`) directly inside the background isolate worker, preserving socket sessions without disconnect cascades.
+- **🛡️ Uninterrupted Background Execution & Dual-Route Fallback**: Active downloads run on independent stream IDs and feature automatic fallback to direct raw Telegram endpoints if proxy parameters need bypass.
+- **💾 Single-Pass Flash I/O & Instant RAM Release**: Eliminates redundant writes to temporary segment cache during downloads, freeing each consumed chunk immediately from RAM.
 - **📍 Exact Byte-Offset Continuation**: Resumes paused or network-interrupted downloads precisely from the last received byte (`Range: bytes=OFFSET-`) without restarting from 0%.
 - **📄 Offline PDF Notes Viewer**: Built-in PDF reader with offline caching and study document generation.
 

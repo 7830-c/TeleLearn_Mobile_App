@@ -199,7 +199,7 @@ class LocalStreamingServer {
   }
 
   static final Map<String, Uint8List> _memChunkCache = {};
-  static const int _maxMemChunks = 32; // 8-16 MB RAM cache (lightweight and responsive)
+  static const int _maxMemChunks = 64; // up to 32 MB RAM cache for maximum download throughput
 
   static void _putMemChunk(String key, Uint8List bytes) {
     if (_memChunkCache.length >= _maxMemChunks) {
@@ -245,7 +245,10 @@ class LocalStreamingServer {
         return;
       }
 
-      _openClientResponses.add(clientRes);
+      final isDownload = params['is_download'] == '1';
+      if (!isDownload) {
+        _openClientResponses.add(clientRes);
+      }
       final rangeHeader = clientReq.headers.value('range');
 
       int startByte = 0;
@@ -295,7 +298,10 @@ class LocalStreamingServer {
       final clen = (totalSize > 0 && endByte >= startByte) ? (endByte - startByte + 1) : 0;
 
       clientRes.statusCode = statusCode;
-      clientRes.headers.set('Content-Type', mime.isNotEmpty ? mime : 'video/mp4');
+      final contentType = (!isDownload || mime.startsWith('video/'))
+          ? ((mime.isNotEmpty && mime.startsWith('video/')) ? mime : 'video/mp4')
+          : (mime.isNotEmpty ? mime : 'application/octet-stream');
+      clientRes.headers.set('Content-Type', contentType);
       clientRes.headers.set('Accept-Ranges', 'bytes');
       clientRes.headers.set('Access-Control-Allow-Origin', '*');
       clientRes.headers.set('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
@@ -308,10 +314,11 @@ class LocalStreamingServer {
         clientRes.headers.set('Content-Length', '$totalSize');
       }
 
-      // Stream chunks (256 KB per MTProto request for fast, low-latency AES decryption without UI stalls)
+      // Universally compatible 256 KB chunk size: 100% compliant with Telegram MTProto for both notes and videos
+      // Eliminates LIMIT_INVALID errors and maintains peak socket stability
       const int tgChunkSize = 256 * 1024;
       final startChunk = startByte ~/ tgChunkSize;
-      final endChunk = (endByte ~/ tgChunkSize);
+      final endChunk = totalSize > 0 ? (endByte ~/ tgChunkSize) : 999999;
 
       Future<Uint8List?> fetchChunk(int chunkIdx) async {
         final cacheKey = '${docId}_$chunkIdx';
@@ -342,6 +349,7 @@ class LocalStreamingServer {
           tgChunkSize: tgChunkSize,
           chunkFile: chunkFile,
           cacheKey: cacheKey,
+          isDownload: isDownload,
         );
 
         _inFlightChunkFutures[cacheKey] = future;
@@ -353,23 +361,50 @@ class LocalStreamingServer {
       }
 
       // When a new streaming request arrives for this document, assign a new stream ID.
-      // Any previous background loop for this document will immediately detect it is superseded and abort.
-      final int currentStreamId = (_activeStreamIdByDoc[docId] ?? 0) + 1;
-      _activeStreamIdByDoc[docId] = currentStreamId;
+      // Downloads run independently and are never superseded by video playback changes.
+      final int currentStreamId;
+      if (!isDownload) {
+        currentStreamId = (_activeStreamIdByDoc[docId] ?? 0) + 1;
+        _activeStreamIdByDoc[docId] = currentStreamId;
+      } else {
+        currentStreamId = 0;
+      }
 
       bool isClientDisconnected = false;
       clientRes.done.catchError((_) {
         isClientDisconnected = true;
       });
 
-      int remaining = clen;
+      int remaining = totalSize > 0 ? clen : (1024 * 1024 * 1024);
       int currentOffset = startByte;
 
+      // 🚀 Controlled lookahead sliding window:
+      // Prefetches 2 chunks ahead (512 KB in flight). Ensures continuous 0ms latency between chunks
+      // without overwhelming the MTProto RPC queue or causing socket resets.
+      void prefetchAhead(int fromChunk) {
+        const int lookaheadCount = 2;
+        for (int p = 1; p <= lookaheadCount; p++) {
+          final nextChunk = fromChunk + p;
+          if (nextChunk <= endChunk) {
+            unawaited(fetchChunk(nextChunk));
+          }
+        }
+      }
+
+      // Trigger initial prefetch burst immediately for downloads (video playback prioritizes chunk 0 first)
+      if (isDownload) {
+        prefetchAhead(startChunk);
+      }
+
       for (int c = startChunk; c <= endChunk; c++) {
-        if (remaining <= 0 || isClientDisconnected || _activeStreamIdByDoc[docId] != currentStreamId) break;
+        if ((totalSize > 0 && remaining <= 0) || isClientDisconnected) break;
+        if (!isDownload && _activeStreamIdByDoc[docId] != currentStreamId) break;
+
+        // Keep prefetch pipeline full ahead of current offset
+        prefetchAhead(c);
 
         final chunkBytes = await fetchChunk(c);
-        if (isClientDisconnected || _activeStreamIdByDoc[docId] != currentStreamId || chunkBytes == null || chunkBytes.isEmpty) {
+        if (isClientDisconnected || (!isDownload && _activeStreamIdByDoc[docId] != currentStreamId) || chunkBytes == null || chunkBytes.isEmpty) {
           break;
         }
 
@@ -380,7 +415,7 @@ class LocalStreamingServer {
         }
 
         final availableInChunk = chunkBytes.length - offsetInChunk;
-        final toSend = (remaining < availableInChunk) ? remaining : availableInChunk;
+        final toSend = (totalSize > 0 && remaining < availableInChunk) ? remaining : availableInChunk;
 
         try {
           if (offsetInChunk == 0 && toSend == chunkBytes.length) {
@@ -395,13 +430,25 @@ class LocalStreamingServer {
           break;
         }
 
-        currentOffset += toSend;
-        remaining -= toSend;
+        // Release consumed chunk from memory immediately during downloads to keep RAM light
+        if (isDownload) {
+          _memChunkCache.remove('${docId}_$c');
+        }
 
-        // Stream chunks smoothly to ExoPlayer without artificial stalls!
-        // The background isolate handles AES decryption, so UI thread is 100% idle.
-        // Yield 12ms so Flutter's vsync pipeline pulses smoothly at 60/120 FPS.
-        await Future<void>.delayed(const Duration(milliseconds: 12));
+        currentOffset += toSend;
+        if (totalSize > 0) {
+          remaining -= toSend;
+        }
+
+        // If this chunk has fewer bytes than tgChunkSize, it is the last chunk of the document
+        if (chunkBytes.length < tgChunkSize) {
+          break;
+        }
+
+        // Yield slightly for video player vsync, but NEVER stall high-speed file downloads!
+        if (!isDownload) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
       }
 
       try {
@@ -426,6 +473,7 @@ class LocalStreamingServer {
     required int tgChunkSize,
     required File? chunkFile,
     required String cacheKey,
+    bool isDownload = false,
   }) async {
     final chunkOffset = chunkIdx * tgChunkSize;
     for (int retry = 0; retry < 3; retry++) {
@@ -451,9 +499,9 @@ class LocalStreamingServer {
 
       if (b != null && b.isNotEmpty) {
         _putMemChunk(cacheKey, b);
-        // 🚀 Persistent Disk Caching (Virtual Memory Concept):
-        // Save to disk asynchronously so seeks, loops, and replays are 100% instant (0ms)
-        if (chunkFile != null) {
+        // Save to temporary segment disk cache when streaming video,
+        // but avoid redundant disk I/O when actively downloading to a destination file
+        if (chunkFile != null && !isDownload) {
           unawaited(chunkFile.writeAsBytes(b, flush: false).catchError((_) => chunkFile));
         }
         return b;

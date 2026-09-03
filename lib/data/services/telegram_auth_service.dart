@@ -571,6 +571,12 @@ class TelegramAuthService {
   static final Map<int, _IoSocket> _socketsByDc = {};
   static final Set<int> _authorizedDcs = {};
   static final Map<int, int> _docDcMap = {};
+  static int? getDocDc(int docId) => _docDcMap[docId];
+  static void setDocDc(int docId, int dcId) {
+    if (dcId >= 1 && dcId <= 5) {
+      _docDcMap[docId] = dcId;
+    }
+  }
   static int _currentDcId = 2;
   static bool _dcLoadedFromPrefs = false;
 
@@ -720,6 +726,9 @@ class TelegramAuthService {
 
     void handleSuccess(Socket s, String ip, int port) {
       if (!completer.isCompleted) {
+        try {
+          s.setOption(SocketOption.tcpNoDelay, true);
+        } catch (_) {}
         debugPrint('[TelegramAuthService] ⚡ Fast TCP connected to DC $targetDc via $ip:$port');
         completer.complete(s);
       } else {

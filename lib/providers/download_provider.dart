@@ -361,7 +361,16 @@ class DownloadProvider extends ChangeNotifier {
         if (LocalStreamingServer.instance.isRunning) {
           urlStr = LocalStreamingServer.instance.getProxiedStreamUrl(urlStr);
         }
+        if (!urlStr.contains('quality=')) {
+          urlStr += urlStr.contains('?') ? '&quality=high' : '?quality=high';
+        }
+        if (!urlStr.contains('is_download=')) {
+          urlStr += urlStr.contains('?') ? '&is_download=1' : '?is_download=1';
+        }
         candidateUrls.add(urlStr);
+        if (note.fileUrl != urlStr && !candidateUrls.contains(note.fileUrl)) {
+          candidateUrls.add(note.fileUrl!);
+        }
         if (urlStr.contains('/download/')) {
           final sanitized = urlStr.replaceAll(task.userPhone, cleanPhone);
           if (!candidateUrls.contains(sanitized)) candidateUrls.add(sanitized);

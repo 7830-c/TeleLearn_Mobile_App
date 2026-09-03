@@ -51,8 +51,13 @@ class TelegramChunkWorker {
           _isInitializing = false;
           _initCompleter?.complete(true);
           debugPrint('[TelegramChunkWorker] ⚡ Background isolate worker connected and ready!');
-        } else if (message is Map<String, dynamic>) {
+        } else if (message is Map) {
           final reqId = message['reqId'] as int?;
+          final docId = message['docId'] as int?;
+          final migratedDc = message['migratedDc'] as int?;
+          if (docId != null && migratedDc != null) {
+            TelegramAuthService.setDocDc(docId, migratedDc);
+          }
           if (reqId != null && _pendingRequests.containsKey(reqId)) {
             final completer = _pendingRequests.remove(reqId);
             final data = message['data'] as List<int>?;
@@ -92,8 +97,12 @@ class TelegramChunkWorker {
 
     // Get auth info to pass down to worker if needed
     final masterDc = await TelegramAuthService.getMasterDcId();
-    final targetDc = (dcId >= 1 && dcId <= 5) ? dcId : masterDc;
-    final authKeyJson = await TelegramAuthService.getCachedAuthKeyJson(targetDc);
+    final cachedDocDc = TelegramAuthService.getDocDc(docId);
+    final targetDc = (cachedDocDc != null && cachedDocDc >= 1 && cachedDocDc <= 5)
+        ? cachedDocDc
+        : ((dcId >= 1 && dcId <= 5) ? dcId : masterDc);
+    final targetAuthKeyJson = await TelegramAuthService.getCachedAuthKeyJson(targetDc);
+    final masterAuthKeyJson = await TelegramAuthService.getCachedAuthKeyJson(masterDc);
 
     final reqId = ++_reqIdCounter;
     final completer = Completer<Uint8List?>();
@@ -104,7 +113,8 @@ class TelegramChunkWorker {
       'reqId': reqId,
       'masterDc': masterDc,
       'targetDc': targetDc,
-      'authKeyJson': authKeyJson,
+      'targetAuthKeyJson': targetAuthKeyJson,
+      'masterAuthKeyJson': masterAuthKeyJson,
       'docId': docId,
       'accessHash': accessHash,
       'fileReference': List<int>.from(fileReference),
@@ -113,7 +123,8 @@ class TelegramChunkWorker {
     });
 
     try {
-      return await completer.future.timeout(const Duration(seconds: 25));
+      // 4-second fail-fast timeout: If worker encounters handshake delays, fall back to main client instantly!
+      return await completer.future.timeout(const Duration(seconds: 4));
     } catch (e) {
       _pendingRequests.remove(reqId);
       return null;
@@ -137,6 +148,9 @@ class TelegramChunkWorker {
 
 class _WorkerIoSocket extends tg.SocketAbstraction {
   _WorkerIoSocket(this._rawSocket) {
+    try {
+      _rawSocket.setOption(SocketOption.tcpNoDelay, true);
+    } catch (_) {}
     _rawSocket.listen(
       (data) {
         if (!_isDestroyed && !_controller.isClosed) {
@@ -216,6 +230,9 @@ void _workerEntryPoint(SendPort mainSendPort) {
 
     void handleSuccess(Socket s) {
       if (!completer.isCompleted) {
+        try {
+          s.setOption(SocketOption.tcpNoDelay, true);
+        } catch (_) {}
         completer.complete(s);
       } else {
         try {
@@ -236,7 +253,7 @@ void _workerEntryPoint(SendPort mainSendPort) {
     );
   }
 
-  Future<tg.Client> getWorkerClient(int targetDc, int masterDc, [Map<String, dynamic>? authKeyJson]) async {
+  Future<tg.Client> getWorkerClient(int targetDc, int masterDc, [Map<String, dynamic>? authKeyJson, Map<String, dynamic>? masterAuthKeyJson]) async {
     final existingSocket = workerSockets[targetDc];
     if (workerClients.containsKey(targetDc) && existingSocket != null && existingSocket.isAlive) {
       return workerClients[targetDc]!;
@@ -288,14 +305,14 @@ void _workerEntryPoint(SendPort mainSendPort) {
     // Export auth from master DC to secondary DC if needed
     if (targetDc != masterDc && !authorizedDcs.contains(targetDc)) {
       try {
-        final masterClient = await getWorkerClient(masterDc, masterDc);
-        final exported = await masterClient.auth.exportAuthorization(dcId: targetDc).timeout(const Duration(seconds: 15));
+        final masterClient = await getWorkerClient(masterDc, masterDc, masterAuthKeyJson);
+        final exported = await masterClient.auth.exportAuthorization(dcId: targetDc).timeout(const Duration(seconds: 10));
         if (exported.result is t.AuthExportedAuthorization) {
           final exp = exported.result as t.AuthExportedAuthorization;
           final impRes = await client.auth.importAuthorization(
             id: exp.id,
             bytes: Uint8List.fromList(exp.bytes),
-          ).timeout(const Duration(seconds: 15));
+          ).timeout(const Duration(seconds: 10));
           if (impRes.result is t.AuthAuthorization) {
             authorizedDcs.add(targetDc);
           }
@@ -307,7 +324,7 @@ void _workerEntryPoint(SendPort mainSendPort) {
   }
 
   workerReceivePort.listen((message) async {
-    if (message is! Map<String, dynamic>) return;
+    if (message is! Map) return;
     final action = message['action'] as String?;
 
     if (action == 'download') {
@@ -319,10 +336,11 @@ void _workerEntryPoint(SendPort mainSendPort) {
       final fileRefList = message['fileReference'] as List<int>;
       final offset = message['offset'] as int;
       final limit = message['limit'] as int;
-      final authKeyJson = message['authKeyJson'] as Map<String, dynamic>?;
+      final targetAuthKeyJson = message['targetAuthKeyJson'] as Map<String, dynamic>?;
+      final masterAuthKeyJson = message['masterAuthKeyJson'] as Map<String, dynamic>?;
 
       try {
-        final client = await getWorkerClient(targetDc, masterDc, authKeyJson);
+        final client = await getWorkerClient(targetDc, masterDc, targetAuthKeyJson, masterAuthKeyJson);
         final location = t.InputDocumentFileLocation(
           id: docId,
           accessHash: accessHash,
@@ -344,18 +362,53 @@ void _workerEntryPoint(SendPort mainSendPort) {
           final uploadFile = res.result as t.UploadFile;
           mainSendPort.send({
             'reqId': reqId,
+            'docId': docId,
             'data': uploadFile.bytes,
+            'migratedDc': null,
           });
           return;
         }
 
-        // On error, close socket to get a fresh one on retry
-        workerClients.remove(targetDc);
-        workerSockets.remove(targetDc)?.destroy();
+        if (res.error != null) {
+          final err = res.error!.errorMessage;
+          if (err.contains('MIGRATE_')) {
+            final parts = err.split('_');
+            final newDc = int.tryParse(parts.last);
+            if (newDc != null && newDc >= 1 && newDc <= 5) {
+              final newClient = await getWorkerClient(newDc, masterDc);
+              final newRes = await newClient.upload.getFile(
+                precise: true,
+                cdnSupported: false,
+                location: location,
+                offset: offset,
+                limit: limit,
+              ).timeout(const Duration(seconds: 25));
+              if (newRes.result is t.UploadFile) {
+                final uploadFile = newRes.result as t.UploadFile;
+                mainSendPort.send({
+                  'reqId': reqId,
+                  'docId': docId,
+                  'data': uploadFile.bytes,
+                  'migratedDc': newDc,
+                });
+                return;
+              }
+            }
+          }
+
+          // Do NOT destroy healthy sockets on MTProto RPC errors (e.g. rate limit / end of file)
+          mainSendPort.send({'reqId': reqId, 'data': null});
+          return;
+        }
+
         mainSendPort.send({'reqId': reqId, 'data': null});
       } catch (e) {
-        workerClients.remove(targetDc);
-        workerSockets.remove(targetDc)?.destroy();
+        // Only destroy socket if underlying TCP connection failed
+        final socket = workerSockets[targetDc];
+        if (e is SocketException || socket == null || !socket.isAlive) {
+          workerClients.remove(targetDc);
+          workerSockets.remove(targetDc)?.destroy();
+        }
         mainSendPort.send({'reqId': reqId, 'data': null});
       }
     } else if (action == 'dispose') {
