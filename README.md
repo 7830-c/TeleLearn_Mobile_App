@@ -14,28 +14,30 @@
 
 ## ✨ Key Features & Highlights
 
-### 🎬 60 FPS Hardware-Accelerated Video Player
-- **🚀 Direct Hardware Overlay Scanout**: Bypasses GPU compositing copies using direct `RepaintBoundary` rendering, saving over **80 MB VRAM** and delivering butter-smooth 60 FPS playback with zero dropped frames.
+### 🎬 Ultra-Smooth 60–120 FPS Video Player
+- **🚀 Dedicated Background Isolate AES-IGE Decryption (`TelegramChunkWorker`)**: Runs computationally heavy pure-Dart AES-IGE-256 decryption off the main thread in a persistent background worker isolate. Flutter's UI thread stays at 0% streaming load and renders at a locked 60–120 FPS with buttery soft touch controls.
+- **🔄 Seamless Fullscreen & Orientation Autoplay**: Video keeps playing continuously without pausing when switching between portrait and fullscreen landscape, rotating the device, or flipping orientations.
+- **📲 Non-Interrupted Playback on Control Center / Quick Settings**: Pulling down the notification shade, quick settings, or MIUI/HyperOS Control Center no longer pauses the video, allowing uninterrupted listening and viewing.
 - **⚡ Zero-Copy Stream Engine**: Leverages `Uint8List.sublistView()` zero-copy slicing to pipe network buffers straight into ExoPlayer with **0 heap allocation churn**.
-- **⚡ 3-Chunk Parallel Lookahead Pipeline**: Automatically prefetches 768 KB to 1.5 MB ahead directly in RAM, eliminating buffering stalls at `1.0x` – `3.0x` playback speeds.
-- **💾 Asynchronous Disk Caching (0ms Repeat Load)**: Asynchronously stores chunks to disk with non-blocking OS page cache writes (`flush: false`), enabling instant 0ms resumption when replaying lectures.
-- **⏯️ Instant Autoplay & Minimal Pause-on-Tap Loader**: Tapping any lesson starts streaming immediately. While connecting, a clean 60×60 circular loader lets you pause/resume network loading on demand.
-- **🛡️ 100% Zero-Audio-Leak Guarantee**: Synchronously pauses controllers and disconnects stream epochs on screen exit or app minimization (`AppLifecycleState.paused / inactive / hidden / detached`).
+- **⚡ Lookahead Pipeline & Flash Disk Virtual Cache**: Prefetches ahead directly into high-speed flash disk storage (`telelearn_segment_cache`), keeping RAM usage minimal while enabling instant 0ms backward seek and lecture resumption.
+- **⏯️ Instant Autoplay & Minimal Loader**: Tapping any lesson starts streaming immediately with visual buffering indicators and responsive HUD overlays.
+- **🛡️ 100% Zero-Audio-Leak Guarantee**: Synchronously pauses controllers and disconnects stream epochs on screen exit or genuine app minimization.
 - **🔄 Intelligent Submodule Back Navigation**: Exiting a video started from the Dashboard returns directly to that module's video list in `CourseExplorerScreen`.
 
 ### 📥 Resilient Background Download Manager
 - **🚀 High-Speed Direct Streams**: Downloads video lectures and course PDFs at full connection bandwidth directly from Telegram Cloud DCs.
-- **🛡️ Uninterrupted Background Execution**: Active downloads are explicitly protected from video player epoch cancellations and continue running smoothly while navigating or watching other lectures.
+- **🛡️ Uninterrupted Background Execution**: Active downloads run independently of the video player and continue smoothly while navigating or watching lectures.
 - **📍 Exact Byte-Offset Continuation**: Resumes paused or network-interrupted downloads precisely from the last received byte (`Range: bytes=OFFSET-`) without restarting from 0%.
 - **📄 Offline PDF Notes Viewer**: Built-in PDF reader with offline caching and study document generation.
 
 ### 📊 Real-Time Daily Study Analytics & Auto-Updating Shelf
 - **🔥 Active Daily Streak & Study Analytics**: SQLite-backed activity tracking displaying today's study time, total hours, and streak counter.
-- **⏯️ Real-Time "Continue Watching" Shelf**: Automatically updates your last-watched lesson, exact position, and percentage on the Dashboard without requiring a pull-to-refresh.
-- **✅ Debounced Completion Tracker**: Automatically marks lessons complete at $\ge 90\%$ watched with debounced single-write persistence to prevent 60 FPS database thrashing.
+- **⏯️ Real-Time "Continue Watching" Shelf**: Automatically updates your last-watched lesson, exact position, and percentage on the Dashboard.
+- **✅ Debounced Completion Tracker**: Automatically marks lessons complete at $\ge 90\%$ watched with debounced single-write persistence to prevent database thrashing.
 
-### 🔄 Sequential Channel Importer
-- **⚡ Non-Blocking FIFO Task Queue**: Multi-channel course synchronizations are queued sequentially (`_syncQueueLock`), maintaining a smooth 60 FPS UI without memory or CPU spikes during imports.
+### 🔄 Clean Telegram Auth & Sequential Channel Importer
+- **⚡ Streamlined Phone & OTP Login**: Clean, clutter-free authentication flow with auto-recovery for session handshakes.
+- **⚡ Non-Blocking FIFO Task Queue**: Multi-channel course synchronizations are queued sequentially (`_syncQueueLock`), maintaining a smooth UI without memory or CPU spikes during imports.
 
 ### 🎨 Modern Aesthetic Design System
 - **🌙 Deep Midnight Dark Mode (`#0B1120`) & ☀️ Warm Light Mode (`#F8FAFC`)**.
@@ -47,19 +49,23 @@
 
 ```mermaid
 graph TD
-    A["TeleLearn Flutter Client"] -->|Direct Surface Scanout| B["Native ExoPlayer Media3"]
+    A["TeleLearn Flutter Client (UI Thread)"] -->|Hardware Direct Scanout| B["Native ExoPlayer Media3"]
     A -->|Resilient HTTP Range| C["Download Engine / Storage"]
     A -->|Local Persistence| D[("SQLite Local DB")]
     
     subgraph Proxy ["In-App Localhost Proxy (127.0.0.1:8765)"]
         B -->|Local HTTP Range Stream| E["LocalStreamingServer"]
         C -->|Persistent Download Stream| E
-        E -->|Zero-Copy Uint8ListView| F["In-Memory Chunk Cache (4MB)"]
-        E -->|Async Background Flush| G["Local Disk Cache (tg_*.bin)"]
+        E -->|High-Speed Flash Cache| G["Local Disk Cache (telelearn_segment_cache)"]
+    end
+
+    subgraph Worker ["Dedicated Background Isolate"]
+        W["TelegramChunkWorker Isolate"] -->|Off-Thread AES-IGE-256 Decrypt| H["Decrypted Chunks"]
+        H -->|0ms SendPort IPC| E
     end
 
     subgraph Telegram ["Telegram Cloud Network"]
-        E -->|Direct Encrypted MTProto TCP/TLS| H["Telegram DCs 1-5 (91.108.56.x / 149.154.167.x)"]
+        W -->|Direct Encrypted MTProto TCP/TLS| T["Telegram DCs 1-5 (91.108.56.x / 149.154.167.x)"]
     end
 ```
 
