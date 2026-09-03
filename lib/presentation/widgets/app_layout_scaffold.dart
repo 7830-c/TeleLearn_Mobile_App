@@ -14,6 +14,7 @@ import '../screens/course/add_course_screen.dart';
 import '../screens/downloads/downloads_screen.dart';
 import '../screens/bookmarks/bookmarks_screen.dart';
 import '../screens/auth/login_screen.dart';
+import '../../data/services/app_update_service.dart';
 
 class AppLayoutScaffold extends StatefulWidget {
   final int initialTabIndex;
@@ -53,6 +54,8 @@ class _AppLayoutScaffoldState extends State<AppLayoutScaffold> {
         context.read<BookmarkProvider>().loadBookmarks(userPhone: phone);
         context.read<DownloadProvider>().loadDownloads(phone);
       }
+      // Check for updates (rate-limited to max once per 24 hours)
+      AppUpdateService.checkForUpdate(context, manual: false);
     });
   }
 
@@ -213,7 +216,43 @@ class _AppLayoutScaffoldState extends State<AppLayoutScaffold> {
               ),
               const SizedBox(height: 24),
               const Divider(),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
+
+              // Check for Updates Tile
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.system_update_rounded, color: AppColors.primary, size: 20),
+                ),
+                title: Text(
+                  'Check for Updates',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+                subtitle: Text(
+                  'Check GitHub Releases for new updates',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  AppUpdateService.checkForUpdate(context, manual: true);
+                },
+              ),
+              const SizedBox(height: 6),
+              const Divider(),
+              const SizedBox(height: 6),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Container(

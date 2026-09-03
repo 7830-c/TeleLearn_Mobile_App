@@ -1,7 +1,7 @@
 name: telelearn
 description: "TeleLearn - Standalone High-Performance Video Learning App with YouTube-style Streaming"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -25,6 +25,7 @@ dependencies:
   open_filex: ^4.5.0
   tg: ^0.0.20
   t: ^229.0.0
+  package_info_plus: ^8.1.0
 
 dev_dependencies:
   flutter_test:
