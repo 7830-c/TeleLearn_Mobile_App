@@ -23,7 +23,8 @@ class LocalStreamingServer {
   int _port = AppConstants.localProxyPort;
 
   Directory? _cacheDir;
-  static const int _maxCacheBytes = 120 * 1024 * 1024; // 120 MB maximum disposable disk cap
+  static const int _maxCacheBytes =
+      120 * 1024 * 1024; // 120 MB maximum disposable disk cap
   static const int _chunkSizeBytes = 2 * 1024 * 1024; // 2 MB chunk block
   static final Map<int, int> _activeStreamIdByDoc = {};
   static final Set<HttpResponse> _openClientResponses = {};
@@ -31,7 +32,8 @@ class LocalStreamingServer {
   /// Cancel all active stream loops, instantly release RAM, close sockets, and clean disk
   static void abortPreviousStreams() {
     _inFlightChunkFutures.clear();
-    _memChunkCache.clear(); // 🚀 Instant RAM reclamation: free all cached chunk bytes
+    _memChunkCache
+        .clear(); // 🚀 Instant RAM reclamation: free all cached chunk bytes
     for (final docId in _activeStreamIdByDoc.keys.toList()) {
       _activeStreamIdByDoc[docId] = (_activeStreamIdByDoc[docId] ?? 0) + 1;
     }
@@ -73,7 +75,8 @@ class LocalStreamingServer {
         shared: true,
       );
       _isRunning = true;
-      debugPrint('[LocalStreamingServer] Segmented Streaming Engine active on http://127.0.0.1:$_port');
+      debugPrint(
+          '[LocalStreamingServer] Segmented Streaming Engine active on http://127.0.0.1:$_port');
       _server!.listen(_handleRequest);
     } catch (e) {
       debugPrint('[LocalStreamingServer] Port bind retry...');
@@ -81,7 +84,8 @@ class LocalStreamingServer {
         _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         _port = _server!.port;
         _isRunning = true;
-        debugPrint('[LocalStreamingServer] Segmented Streaming Engine active on http://127.0.0.1:$_port');
+        debugPrint(
+            '[LocalStreamingServer] Segmented Streaming Engine active on http://127.0.0.1:$_port');
         _server!.listen(_handleRequest);
       } catch (err) {
         debugPrint('[LocalStreamingServer] Server startup error: $err');
@@ -108,7 +112,8 @@ class LocalStreamingServer {
       } catch (_) {}
       return remoteUrl;
     }
-    if (remoteUrl.startsWith('http://127.0.0.1:$_port') || remoteUrl.startsWith('http://localhost:$_port')) {
+    if (remoteUrl.startsWith('http://127.0.0.1:$_port') ||
+        remoteUrl.startsWith('http://localhost:$_port')) {
       return remoteUrl;
     }
     final encoded = Uri.encodeComponent(remoteUrl);
@@ -134,7 +139,8 @@ class LocalStreamingServer {
 
       if (totalSize > _maxCacheBytes) {
         // Sort oldest first (LRU)
-        files.sort((a, b) => a.lastModifiedSync().compareTo(b.lastModifiedSync()));
+        files.sort(
+            (a, b) => a.lastModifiedSync().compareTo(b.lastModifiedSync()));
         for (final f in files) {
           if (totalSize <= _maxCacheBytes * 0.75) break; // Drop to 75%
           final sz = f.lengthSync();
@@ -153,8 +159,10 @@ class LocalStreamingServer {
 
     // CORS & Range headers
     response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
-    response.headers.set('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+    response.headers
+        .set('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+    response.headers.set('Access-Control-Expose-Headers',
+        'Content-Range, Content-Length, Accept-Ranges');
     response.headers.set('Accept-Ranges', 'bytes');
 
     if (request.method == 'OPTIONS') {
@@ -171,7 +179,8 @@ class LocalStreamingServer {
     }
 
     if (path == '/tg_stream') {
-      await _streamTelegramDocument(request, response, request.uri.queryParameters);
+      await _streamTelegramDocument(
+          request, response, request.uri.queryParameters);
       return;
     }
 
@@ -186,7 +195,8 @@ class LocalStreamingServer {
 
       if (remoteUrl.contains('/tg_stream')) {
         final parsedUri = Uri.parse(remoteUrl);
-        await _streamTelegramDocument(request, response, parsedUri.queryParameters);
+        await _streamTelegramDocument(
+            request, response, parsedUri.queryParameters);
         return;
       }
 
@@ -199,7 +209,8 @@ class LocalStreamingServer {
   }
 
   static final Map<String, Uint8List> _memChunkCache = {};
-  static const int _maxMemChunks = 32; // 8-16 MB RAM cache (lightweight and responsive)
+  static const int _maxMemChunks =
+      32; // 8-16 MB RAM cache (lightweight and responsive)
 
   static void _putMemChunk(String key, Uint8List bytes) {
     if (_memChunkCache.length >= _maxMemChunks) {
@@ -292,35 +303,47 @@ class LocalStreamingServer {
         }
       }
 
-      final clen = (totalSize > 0 && endByte >= startByte) ? (endByte - startByte + 1) : 0;
+      final clen = (totalSize > 0 && endByte >= startByte)
+          ? (endByte - startByte + 1)
+          : 0;
 
       clientRes.statusCode = statusCode;
-      clientRes.headers.set('Content-Type', mime.isNotEmpty ? mime : 'video/mp4');
+      clientRes.headers
+          .set('Content-Type', mime.isNotEmpty ? mime : 'video/mp4');
       clientRes.headers.set('Accept-Ranges', 'bytes');
       clientRes.headers.set('Access-Control-Allow-Origin', '*');
-      clientRes.headers.set('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
+      clientRes.headers.set('Access-Control-Expose-Headers',
+          'Content-Range, Accept-Ranges, Content-Length, Content-Type');
       clientRes.headers.set('Cache-Control', 'private, max-age=604800');
 
       if (statusCode == HttpStatus.partialContent && totalSize > 0) {
-        clientRes.headers.set('Content-Range', 'bytes $startByte-$endByte/$totalSize');
+        clientRes.headers
+            .set('Content-Range', 'bytes $startByte-$endByte/$totalSize');
         clientRes.headers.set('Content-Length', '$clen');
       } else if (totalSize > 0) {
         clientRes.headers.set('Content-Length', '$totalSize');
       }
 
-      // Stream chunks (256 KB per MTProto request for fast, low-latency AES decryption without UI stalls)
-      const int tgChunkSize = 256 * 1024;
+      final isDownload = params['is_download'] == '1';
+      // Keep playback chunks small for low startup latency; downloads use larger
+      // chunks and skip playback pacing because they do not drive a video frame.
+      final tgChunkSize = isDownload ? 512 * 1024 : 256 * 1024;
       final startChunk = startByte ~/ tgChunkSize;
       final endChunk = (endByte ~/ tgChunkSize);
 
       Future<Uint8List?> fetchChunk(int chunkIdx) async {
-        final cacheKey = '${docId}_$chunkIdx';
+        final cacheKey = '${docId}_${tgChunkSize}_$chunkIdx';
         if (_memChunkCache.containsKey(cacheKey)) {
           return _memChunkCache[cacheKey];
         }
 
-        final chunkFile = _cacheDir != null ? File(p.join(_cacheDir!.path, 'tg_${docId}_chunk_$chunkIdx.bin')) : null;
-        if (chunkFile != null && chunkFile.existsSync() && chunkFile.lengthSync() > 0) {
+        final chunkFile = _cacheDir != null
+            ? File(p.join(_cacheDir!.path,
+                'tg_${docId}_${tgChunkSize}_chunk_$chunkIdx.bin'))
+            : null;
+        if (chunkFile != null &&
+            chunkFile.existsSync() &&
+            chunkFile.lengthSync() > 0) {
           try {
             final b = await chunkFile.readAsBytes();
             _putMemChunk(cacheKey, b);
@@ -366,10 +389,15 @@ class LocalStreamingServer {
       int currentOffset = startByte;
 
       for (int c = startChunk; c <= endChunk; c++) {
-        if (remaining <= 0 || isClientDisconnected || _activeStreamIdByDoc[docId] != currentStreamId) break;
+        if (remaining <= 0 ||
+            isClientDisconnected ||
+            _activeStreamIdByDoc[docId] != currentStreamId) break;
 
         final chunkBytes = await fetchChunk(c);
-        if (isClientDisconnected || _activeStreamIdByDoc[docId] != currentStreamId || chunkBytes == null || chunkBytes.isEmpty) {
+        if (isClientDisconnected ||
+            _activeStreamIdByDoc[docId] != currentStreamId ||
+            chunkBytes == null ||
+            chunkBytes.isEmpty) {
           break;
         }
 
@@ -380,13 +408,15 @@ class LocalStreamingServer {
         }
 
         final availableInChunk = chunkBytes.length - offsetInChunk;
-        final toSend = (remaining < availableInChunk) ? remaining : availableInChunk;
+        final toSend =
+            (remaining < availableInChunk) ? remaining : availableInChunk;
 
         try {
           if (offsetInChunk == 0 && toSend == chunkBytes.length) {
             clientRes.add(chunkBytes);
           } else {
-            clientRes.add(Uint8List.sublistView(chunkBytes, offsetInChunk, offsetInChunk + toSend));
+            clientRes.add(Uint8List.sublistView(
+                chunkBytes, offsetInChunk, offsetInChunk + toSend));
           }
           await clientRes.flush();
         } catch (_) {
@@ -398,10 +428,10 @@ class LocalStreamingServer {
         currentOffset += toSend;
         remaining -= toSend;
 
-        // Stream chunks smoothly to ExoPlayer without artificial stalls!
-        // The background isolate handles AES decryption, so UI thread is 100% idle.
-        // Yield 12ms so Flutter's vsync pipeline pulses smoothly at 60/120 FPS.
-        await Future<void>.delayed(const Duration(milliseconds: 12));
+        if (!isDownload) {
+          // Give the player a short scheduling yield after each chunk.
+          await Future<void>.delayed(const Duration(milliseconds: 12));
+        }
       }
 
       try {
@@ -450,11 +480,22 @@ class LocalStreamingServer {
       );
 
       if (b != null && b.isNotEmpty) {
-        _putMemChunk(cacheKey, b);
-        // 🚀 Persistent Disk Caching (Virtual Memory Concept):
-        // Save to disk asynchronously so seeks, loops, and replays are 100% instant (0ms)
+        final chunkBytes = b;
+        _putMemChunk(cacheKey, chunkBytes);
         if (chunkFile != null) {
-          unawaited(chunkFile.writeAsBytes(b, flush: false).catchError((_) => chunkFile));
+          // Never expose a partially written chunk as a valid cache hit.
+          final tempChunkFile = File('${chunkFile.path}.tmp');
+          unawaited(() async {
+            try {
+              await tempChunkFile.writeAsBytes(chunkBytes, flush: false);
+              if (chunkFile.existsSync()) await chunkFile.delete();
+              await tempChunkFile.rename(chunkFile.path);
+            } catch (_) {
+              try {
+                if (tempChunkFile.existsSync()) await tempChunkFile.delete();
+              } catch (_) {}
+            }
+          }());
         }
         return b;
       }
@@ -467,7 +508,8 @@ class LocalStreamingServer {
 
   static Uint8List _hexToBytes(String hex) {
     try {
-      final clean = Uri.decodeComponent(hex).replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
+      final clean =
+          Uri.decodeComponent(hex).replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
       if (clean.isEmpty || clean.length % 2 != 0) return Uint8List(0);
       final result = Uint8List(clean.length ~/ 2);
       for (int i = 0; i < clean.length; i += 2) {
@@ -496,17 +538,22 @@ class LocalStreamingServer {
       }
 
       final chunkIndex = startByte ~/ _chunkSizeBytes;
-      final chunkFile = _cacheDir != null ? _getChunkFile(urlHash, chunkIndex) : null;
+      final chunkFile =
+          _cacheDir != null ? _getChunkFile(urlHash, chunkIndex) : null;
 
       // If chunk is already warm on local disk
-      if (chunkFile != null && chunkFile.existsSync() && chunkFile.lengthSync() > 0) {
+      if (chunkFile != null &&
+          chunkFile.existsSync() &&
+          chunkFile.lengthSync() > 0) {
         final offsetInChunk = startByte % _chunkSizeBytes;
         final chunkLen = chunkFile.lengthSync();
         if (offsetInChunk < chunkLen) {
           clientRes.statusCode = HttpStatus.partialContent;
           clientRes.headers.set('Content-Type', 'video/mp4');
-          clientRes.headers.set('Content-Range', 'bytes $startByte-${startByte + (chunkLen - offsetInChunk) - 1}/*');
-          clientRes.headers.set('Content-Length', '${chunkLen - offsetInChunk}');
+          clientRes.headers.set('Content-Range',
+              'bytes $startByte-${startByte + (chunkLen - offsetInChunk) - 1}/*');
+          clientRes.headers
+              .set('Content-Length', '${chunkLen - offsetInChunk}');
           final stream = chunkFile.openRead(offsetInChunk);
           await clientRes.addStream(stream);
           await clientRes.close();
@@ -578,4 +625,3 @@ class LocalStreamingServer {
     }
   }
 }
-

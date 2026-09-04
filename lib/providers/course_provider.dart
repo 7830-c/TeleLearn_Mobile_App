@@ -16,13 +16,20 @@ class CourseProvider extends ChangeNotifier {
 
   // Background sync tracking that persists across navigation
   final Set<int> _syncingChannelIds = {};
+  final Map<String, DateTime> _lastMediaRefreshAt = {};
+  final Map<String, Future<CourseModel?>> _mediaRefreshes = {};
+  Future<void>? _coursesLoadFuture;
   String? _currentSyncStatus;
 
   List<CourseModel> get courses {
     if (_searchQuery.trim().isEmpty) return _courses;
-    return _courses.where((c) =>
-        c.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        (c.description ?? '').toLowerCase().contains(_searchQuery.toLowerCase())).toList();
+    return _courses
+        .where((c) =>
+            c.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+            (c.description ?? '')
+                .toLowerCase()
+                .contains(_searchQuery.toLowerCase()))
+        .toList();
   }
 
   bool get isLoading => _isLoading;
@@ -32,7 +39,8 @@ class CourseProvider extends ChangeNotifier {
   Set<int> get syncingChannelIds => _syncingChannelIds;
   String? get currentSyncStatus => _currentSyncStatus;
 
-  bool isChannelSyncing(int channelId) => _syncingChannelIds.contains(channelId);
+  bool isChannelSyncing(int channelId) =>
+      _syncingChannelIds.contains(channelId);
 
   CourseProvider();
 
@@ -41,7 +49,18 @@ class CourseProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadCourses({String userPhone = ''}) async {
+  Future<void> loadCourses({String userPhone = ''}) {
+    if (_coursesLoadFuture != null) return _coursesLoadFuture!;
+    final loadFuture = _loadCourses(userPhone: userPhone);
+    _coursesLoadFuture = loadFuture.whenComplete(() {
+      if (identical(_coursesLoadFuture, loadFuture)) {
+        _coursesLoadFuture = null;
+      }
+    });
+    return _coursesLoadFuture!;
+  }
+
+  Future<void> _loadCourses({String userPhone = ''}) async {
     if (userPhone.isNotEmpty) {
       _activeUserPhone = userPhone;
     }
@@ -49,7 +68,8 @@ class CourseProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _courses = await AppDatabase.instance.getAllCourses(userPhone: _activeUserPhone);
+      _courses =
+          await AppDatabase.instance.getAllCourses(userPhone: _activeUserPhone);
     } catch (e) {
       debugPrint('[CourseProvider] Error loading courses: $e');
     } finally {
@@ -59,7 +79,8 @@ class CourseProvider extends ChangeNotifier {
   }
 
   /// Load Telegram channels once, and only re-fetch if forceRefresh is true
-  Future<void> loadAvailableChannels({required String phone, bool forceRefresh = false}) async {
+  Future<void> loadAvailableChannels(
+      {required String phone, bool forceRefresh = false}) async {
     if (_availableChannels.isNotEmpty && !forceRefresh) {
       return;
     }
@@ -84,14 +105,97 @@ class CourseProvider extends ChangeNotifier {
     _syncingChannelIds.clear();
     _activeUserPhone = '';
     _searchQuery = '';
+    _lastMediaRefreshAt.clear();
+    _mediaRefreshes.clear();
     notifyListeners();
+  }
+
+  Future<CourseModel?> refreshCourseForMediaFailure(
+      String courseId, int lessonId,
+      {required String phone}) async {
+    final refreshKey = '${courseId}_$lessonId';
+    final activeRefresh = _mediaRefreshes[refreshKey];
+    if (activeRefresh != null) return activeRefresh;
+    final lastRefresh = _lastMediaRefreshAt[refreshKey];
+    if (lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < const Duration(minutes: 5)) {
+      return getCourse(courseId);
+    }
+    _lastMediaRefreshAt[refreshKey] = DateTime.now();
+    final refresh = _refreshLessonAfterMediaFailure(courseId, lessonId, phone);
+    _mediaRefreshes[refreshKey] = refresh;
+    try {
+      return await refresh;
+    } finally {
+      _mediaRefreshes.remove(refreshKey);
+    }
+  }
+
+  Future<CourseModel?> _refreshLessonAfterMediaFailure(
+      String courseId, int lessonId, String phone) async {
+    final course = getCourse(courseId);
+    if (course == null) return null;
+    final lesson = await TelegramImportService.refreshLessonFromTelegram(
+      phone: phone,
+      channelId: course.channelId,
+      lessonId: lessonId,
+    );
+    if (lesson == null) return course;
+
+    final updatedCourse = course.copyWith(
+      modules: course.modules
+          .map((module) => module.copyWith(
+                lessons: module.lessons
+                    .map((item) => item.id == lessonId ? lesson : item)
+                    .toList(),
+              ))
+          .toList(),
+    );
+    final index = _courses.indexWhere((item) => item.id == courseId);
+    if (index >= 0) _courses[index] = updatedCourse;
+    unawaited(
+        AppDatabase.instance.insertCourse(updatedCourse, userPhone: phone));
+    notifyListeners();
+    return updatedCourse;
+  }
+
+  Future<CourseModel?> refreshModule(String courseId, int moduleId,
+      {required String phone}) async {
+    final course = getCourse(courseId);
+    final module =
+        course?.modules.where((item) => item.id == moduleId).firstOrNull;
+    if (course == null || module == null) return course;
+
+    final refreshedData = await TelegramImportService.refreshModuleFromTelegram(
+      phone: phone,
+      channelId: course.channelId,
+      moduleId: moduleId,
+    );
+    if (refreshedData == null) return course;
+    final refreshedModule = module.copyWith(
+      lessons: refreshedData.lessons,
+      notes: refreshedData.notes,
+    );
+
+    final updatedCourse = course.copyWith(
+      modules: course.modules
+          .map((item) => item.id == moduleId ? refreshedModule : item)
+          .toList(),
+    );
+    final index = _courses.indexWhere((item) => item.id == courseId);
+    if (index >= 0) _courses[index] = updatedCourse;
+    unawaited(
+        AppDatabase.instance.insertCourse(updatedCourse, userPhone: phone));
+    notifyListeners();
+    return updatedCourse;
   }
 
   CourseModel? getCourse(String courseId) {
     return _courses.where((c) => c.id == courseId).firstOrNull;
   }
 
-  Future<void> renameModule(String courseId, int moduleId, String newTitle) async {
+  Future<void> renameModule(
+      String courseId, int moduleId, String newTitle) async {
     final title = newTitle.trim();
     if (title.isEmpty) return;
 
@@ -141,7 +245,8 @@ class CourseProvider extends ChangeNotifier {
   // Sequential synchronization queue lock to ensure low memory load and smooth 60 FPS UI
   Future<void> _syncQueueLock = Future.value();
 
-  Future<CourseModel> importChannel(TelegramChannelInfo channel, {required String phone}) async {
+  Future<CourseModel> importChannel(TelegramChannelInfo channel,
+      {required String phone}) async {
     _syncingChannelIds.add(channel.id);
     _currentSyncStatus = 'Queued "${channel.name}"...';
     notifyListeners();
@@ -158,11 +263,12 @@ class CourseProvider extends ChangeNotifier {
           accessHash: channel.accessHash,
           channelName: channel.name,
           onProgress: (fetched, total) {
-            _currentSyncStatus = 'Importing "${channel.name}" ($fetched${total != null ? '/$total' : ''})...';
+            _currentSyncStatus =
+                'Importing "${channel.name}" ($fetched${total != null ? '/$total' : ''})...';
             notifyListeners();
           },
         );
-        
+
         // Instant in-memory update avoids full SQLite read/jsonDecode freeze
         final idx = _courses.indexWhere((c) => c.id == newCourse.id);
         if (idx >= 0) {
@@ -173,7 +279,8 @@ class CourseProvider extends ChangeNotifier {
         notifyListeners();
 
         // Persist to SQLite in background
-        unawaited(AppDatabase.instance.insertCourse(newCourse, userPhone: phone));
+        unawaited(
+            AppDatabase.instance.insertCourse(newCourse, userPhone: phone));
         completer.complete(newCourse);
       } catch (e, st) {
         completer.completeError(e, st);
@@ -189,7 +296,8 @@ class CourseProvider extends ChangeNotifier {
     return completer.future;
   }
 
-  Future<CourseModel> syncCourse(String courseId, {required String phone}) async {
+  Future<CourseModel> syncCourse(String courseId,
+      {required String phone}) async {
     final existing = getCourse(courseId);
     final channelId = existing?.channelId ?? int.tryParse(courseId) ?? 0;
 
@@ -203,18 +311,22 @@ class CourseProvider extends ChangeNotifier {
         _currentSyncStatus = 'Refreshing "${existing?.title ?? 'Course'}"...';
         notifyListeners();
 
-        final updatedCourse = await TelegramImportService.syncCourseFromTelegram(
+        final updatedCourse =
+            await TelegramImportService.syncCourseFromTelegram(
           phone: phone,
           channelId: channelId,
           channelName: existing?.title,
           onProgress: (fetched, total) {
-            _currentSyncStatus = 'Refreshing "${existing?.title ?? 'Course'}" ($fetched${total != null ? '/$total' : ''})...';
+            _currentSyncStatus =
+                'Refreshing "${existing?.title ?? 'Course'}" ($fetched${total != null ? '/$total' : ''})...';
             notifyListeners();
           },
         );
 
         // Safe Guard: Only update if new sync returned real modules, or if existing is empty
-        if (updatedCourse.modules.isNotEmpty && updatedCourse.modules.any((m) => m.lessons.isNotEmpty || m.notes.isNotEmpty)) {
+        if (updatedCourse.modules.isNotEmpty &&
+            updatedCourse.modules
+                .any((m) => m.lessons.isNotEmpty || m.notes.isNotEmpty)) {
           final idx = _courses.indexWhere((c) => c.id == updatedCourse.id);
           if (idx >= 0) {
             _courses[idx] = updatedCourse;
@@ -224,7 +336,8 @@ class CourseProvider extends ChangeNotifier {
           notifyListeners();
 
           // Persist to SQLite in background
-          unawaited(AppDatabase.instance.insertCourse(updatedCourse, userPhone: phone));
+          unawaited(AppDatabase.instance
+              .insertCourse(updatedCourse, userPhone: phone));
           completer.complete(updatedCourse);
         } else {
           completer.complete(existing ?? updatedCourse);

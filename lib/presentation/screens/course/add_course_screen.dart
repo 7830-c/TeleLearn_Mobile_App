@@ -25,6 +25,13 @@ class _AddCourseScreenState extends State<AddCourseScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final phone = context.read<AuthProvider>().phoneNumber;
+      if (phone.isNotEmpty) {
+        context.read<CourseProvider>().loadAvailableChannels(phone: phone);
+      }
+    });
   }
 
   @override

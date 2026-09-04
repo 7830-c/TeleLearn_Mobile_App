@@ -9,6 +9,7 @@ import '../data/local_db/app_database.dart';
 import '../data/models/course_model.dart';
 import '../data/models/download_model.dart';
 import '../data/services/local_streaming_server.dart';
+import '../data/services/telegram_import_service.dart';
 
 class DownloadTask {
   final String courseId;
@@ -30,6 +31,7 @@ class DownloadTask {
   final CourseNote? note;
   final String userPhone;
   http.Client? currentClient;
+  int refreshRetryCount;
 
   DownloadTask({
     required this.courseId,
@@ -50,6 +52,7 @@ class DownloadTask {
     this.totalBytes = 0,
     this.speedBytesPerSec = 0.0,
     this.remainingSeconds = 0,
+    this.refreshRetryCount = 0,
   });
 
   String get speedText {
@@ -62,7 +65,10 @@ class DownloadTask {
   }
 
   String get timeRemainingText {
-    if (remainingSeconds <= 0 || !isDownloading || isPaused || speedBytesPerSec <= 0) return '';
+    if (remainingSeconds <= 0 ||
+        !isDownloading ||
+        isPaused ||
+        speedBytesPerSec <= 0) return '';
     if (remainingSeconds < 60) {
       return '${remainingSeconds}s left';
     } else if (remainingSeconds < 3600) {
@@ -93,34 +99,54 @@ class DownloadTask {
 class DownloadProvider extends ChangeNotifier {
   List<DownloadModel> _downloads = [];
   final Map<String, DownloadTask> _activeTasks = {};
+  final Map<String, DateTime> _lastMediaRefreshAt = {};
   String _activeUserPhone = '';
   bool _isLoading = true;
 
   List<DownloadModel> get downloads => _downloads;
-  List<DownloadModel> get downloadedVideos => _downloads.where((d) => d.isVideo).toList();
-  List<DownloadModel> get downloadedNotes => _downloads.where((d) => d.isNote).toList();
+  List<DownloadModel> get downloadedVideos =>
+      _downloads.where((d) => d.isVideo).toList();
+  List<DownloadModel> get downloadedNotes =>
+      _downloads.where((d) => d.isNote).toList();
 
   List<DownloadTask> get activeTasks => _activeTasks.values.toList();
-  List<DownloadTask> get activeVideoTasks => _activeTasks.values.where((t) => t.mediaType == 'video' && !t.isCompleted).toList();
-  List<DownloadTask> get activeNoteTasks => _activeTasks.values.where((t) => t.mediaType == 'note' && !t.isCompleted).toList();
+  List<DownloadTask> get activeVideoTasks => _activeTasks.values
+      .where((t) => t.mediaType == 'video' && !t.isCompleted)
+      .toList();
+  List<DownloadTask> get activeNoteTasks => _activeTasks.values
+      .where((t) => t.mediaType == 'note' && !t.isCompleted)
+      .toList();
 
-  int get count => _downloads.length + _activeTasks.values.where((t) => !t.isCompleted).length;
+  int get count =>
+      _downloads.length +
+      _activeTasks.values.where((t) => !t.isCompleted).length;
   int get videoCount => downloadedVideos.length + activeVideoTasks.length;
   int get noteCount => downloadedNotes.length + activeNoteTasks.length;
   bool get isLoading => _isLoading;
 
-  String _taskKey(String courseId, int itemId, String mediaType) => '${courseId}_${itemId}_$mediaType';
+  String _taskKey(String courseId, int itemId, String mediaType) =>
+      '${courseId}_${itemId}_$mediaType';
 
-  DownloadTask? getTask(String courseId, int itemId, [String mediaType = 'video']) {
+  DownloadTask? getTask(String courseId, int itemId,
+      [String mediaType = 'video']) {
     return _activeTasks[_taskKey(courseId, itemId, mediaType)];
   }
 
   bool isDownloaded(String courseId, int itemId, [String mediaType = 'video']) {
-    return _downloads.any((d) => d.courseId == courseId && d.itemId == itemId && d.mediaType == mediaType);
+    return _downloads.any((d) =>
+        d.courseId == courseId &&
+        d.itemId == itemId &&
+        d.mediaType == mediaType);
   }
 
-  DownloadModel? getDownloadRecord(String courseId, int itemId, [String mediaType = 'video']) {
-    return _downloads.where((d) => d.courseId == courseId && d.itemId == itemId && d.mediaType == mediaType).firstOrNull;
+  DownloadModel? getDownloadRecord(String courseId, int itemId,
+      [String mediaType = 'video']) {
+    return _downloads
+        .where((d) =>
+            d.courseId == courseId &&
+            d.itemId == itemId &&
+            d.mediaType == mediaType)
+        .firstOrNull;
   }
 
   Future<void> loadDownloads(String userPhone) async {
@@ -129,7 +155,8 @@ class DownloadProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _downloads = await AppDatabase.instance.getAllDownloads(userPhone: userPhone);
+      _downloads =
+          await AppDatabase.instance.getAllDownloads(userPhone: userPhone);
     } catch (e) {
       debugPrint('[DownloadProvider] Load error: $e');
     } finally {
@@ -145,6 +172,7 @@ class DownloadProvider extends ChangeNotifier {
     }
     _downloads.clear();
     _activeTasks.clear();
+    _lastMediaRefreshAt.clear();
     _activeUserPhone = '';
     notifyListeners();
   }
@@ -209,7 +237,8 @@ class DownloadProvider extends ChangeNotifier {
     }
     baseDir ??= await getApplicationDocumentsDirectory();
 
-    final dir = Directory(p.join(baseDir.path, 'downloads', phoneDir, 'videos'));
+    final dir =
+        Directory(p.join(baseDir.path, 'downloads', phoneDir, 'videos'));
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);
     }
@@ -220,7 +249,8 @@ class DownloadProvider extends ChangeNotifier {
     final key = _taskKey(task.courseId, task.itemId, 'video');
     try {
       final dir = await _getVideosDirectory(task.userPhone);
-      final phoneDir = task.userPhone.replaceAll('+', '').replaceAll(' ', '').trim();
+      final phoneDir =
+          task.userPhone.replaceAll('+', '').replaceAll(' ', '').trim();
 
       final fileName = '${task.courseId}_${task.itemId}.mp4';
       final destinationFile = File(p.join(dir.path, fileName));
@@ -228,7 +258,8 @@ class DownloadProvider extends ChangeNotifier {
 
       // Asynchronously fetch thumbnail in background
       String? localThumbPath;
-      if (task.lesson?.thumbnailUrl != null && task.lesson!.thumbnailUrl!.isNotEmpty) {
+      if (task.lesson?.thumbnailUrl != null &&
+          task.lesson!.thumbnailUrl!.isNotEmpty) {
         _fetchThumbnailInBackground(
           thumbnailUrl: task.lesson!.thumbnailUrl!,
           appDirPath: dir.parent.parent.path,
@@ -243,16 +274,20 @@ class DownloadProvider extends ChangeNotifier {
         throw Exception('No stream URL available for this lesson');
       }
 
-      if (LocalStreamingServer.instance.isRunning) {
-        remoteUrl = LocalStreamingServer.instance.getProxiedStreamUrl(remoteUrl);
+      if (remoteUrl.contains('/tg_stream') &&
+          LocalStreamingServer.instance.isRunning) {
+        remoteUrl =
+            LocalStreamingServer.instance.getProxiedStreamUrl(remoteUrl);
       }
 
       // Preserve /courses/stream/ endpoint with quality=high (Enables exact Range byte-resume & 512KB MTProto pipe)
       if (!remoteUrl.contains('quality=')) {
-        remoteUrl += remoteUrl.contains('?') ? '&quality=high' : '?quality=high';
+        remoteUrl +=
+            remoteUrl.contains('?') ? '&quality=high' : '?quality=high';
       }
       if (!remoteUrl.contains('is_download=')) {
-        remoteUrl += remoteUrl.contains('?') ? '&is_download=1' : '?is_download=1';
+        remoteUrl +=
+            remoteUrl.contains('?') ? '&is_download=1' : '?is_download=1';
       }
 
       // Execute high-speed direct stream download
@@ -287,7 +322,10 @@ class DownloadProvider extends ChangeNotifier {
       );
 
       await AppDatabase.instance.saveDownload(downloadModel);
-      _downloads.removeWhere((d) => d.courseId == task.courseId && d.itemId == task.itemId && d.mediaType == 'video');
+      _downloads.removeWhere((d) =>
+          d.courseId == task.courseId &&
+          d.itemId == task.itemId &&
+          d.mediaType == 'video');
       _downloads.insert(0, downloadModel);
       _activeTasks.remove(key);
       notifyListeners();
@@ -297,6 +335,59 @@ class DownloadProvider extends ChangeNotifier {
       task.isDownloading = false;
       task.error = e.toString();
       notifyListeners();
+      if (task.lesson?.videoUrl?.contains('/tg_stream') == true &&
+          task.refreshRetryCount == 0) {
+        unawaited(_refreshAndRetryVideoDownload(task));
+      }
+    }
+  }
+
+  Future<void> _refreshAndRetryVideoDownload(DownloadTask failedTask) async {
+    try {
+      final refreshKey = '${failedTask.courseId}_${failedTask.itemId}';
+      final lastRefresh = _lastMediaRefreshAt[refreshKey];
+      if (lastRefresh != null &&
+          DateTime.now().difference(lastRefresh) < const Duration(minutes: 5)) {
+        return;
+      }
+      _lastMediaRefreshAt[refreshKey] = DateTime.now();
+      final refreshedLesson =
+          await TelegramImportService.refreshLessonFromTelegram(
+        phone: failedTask.userPhone,
+        channelId: failedTask.course.channelId,
+        lessonId: failedTask.itemId,
+      );
+      if (refreshedLesson == null ||
+          refreshedLesson.videoUrl == failedTask.lesson?.videoUrl) return;
+
+      final refreshedModules = failedTask.course.modules.map((module) {
+        final lessons = module.lessons
+            .map((lesson) =>
+                lesson.id == failedTask.itemId ? refreshedLesson : lesson)
+            .toList();
+        return module.copyWith(lessons: lessons);
+      }).toList();
+      final refreshedCourse =
+          failedTask.course.copyWith(modules: refreshedModules);
+
+      final key = _taskKey(failedTask.courseId, failedTask.itemId, 'video');
+      final retryTask = DownloadTask(
+        courseId: refreshedCourse.id,
+        itemId: failedTask.itemId,
+        title: refreshedLesson.title,
+        mediaType: 'video',
+        course: refreshedCourse,
+        lesson: refreshedLesson,
+        userPhone: failedTask.userPhone,
+        totalBytes: refreshedLesson.size ?? 0,
+        refreshRetryCount: failedTask.refreshRetryCount + 1,
+      );
+      _activeTasks[key] = retryTask;
+      notifyListeners();
+      await _runVideoDownload(retryTask);
+    } catch (refreshError) {
+      debugPrint(
+          '[DownloadProvider] Course refresh after download failure failed: $refreshError');
     }
   }
 
@@ -333,7 +424,8 @@ class DownloadProvider extends ChangeNotifier {
     final key = _taskKey(task.courseId, task.itemId, 'note');
     try {
       final dir = await _getNotesDirectory(task.userPhone);
-      final cleanPhone = task.userPhone.replaceAll('+', '').replaceAll(' ', '').trim();
+      final cleanPhone =
+          task.userPhone.replaceAll('+', '').replaceAll(' ', '').trim();
 
       String ext = '.pdf';
       final note = task.note;
@@ -344,8 +436,10 @@ class DownloadProvider extends ChangeNotifier {
         if (urlExt.isNotEmpty) ext = urlExt;
       }
 
-      final cleanNoteTitle = (note?.displayName ?? task.title).replaceAll(RegExp(r'[^\w\.\-]'), '_');
-      final fileName = 'course_${task.courseId}_note_${task.itemId}_$cleanNoteTitle$ext';
+      final cleanNoteTitle = (note?.displayName ?? task.title)
+          .replaceAll(RegExp(r'[^\w\.\-]'), '_');
+      final fileName =
+          'course_${task.courseId}_note_${task.itemId}_$cleanNoteTitle$ext';
       final destinationFile = File(p.join(dir.path, fileName));
       final tempFile = File(p.join(dir.path, '$fileName.download.tmp'));
 
@@ -358,17 +452,17 @@ class DownloadProvider extends ChangeNotifier {
 
       if (note?.fileUrl != null && note!.fileUrl!.isNotEmpty) {
         var urlStr = note.fileUrl!;
-        if (LocalStreamingServer.instance.isRunning) {
+        if (urlStr.contains('/tg_stream') &&
+            LocalStreamingServer.instance.isRunning) {
           urlStr = LocalStreamingServer.instance.getProxiedStreamUrl(urlStr);
         }
+        urlStr += urlStr.contains('?') ? '&is_download=1' : '?is_download=1';
         candidateUrls.add(urlStr);
         if (urlStr.contains('/download/')) {
           final sanitized = urlStr.replaceAll(task.userPhone, cleanPhone);
           if (!candidateUrls.contains(sanitized)) candidateUrls.add(sanitized);
         }
       }
-
-
 
       String? lastError;
       for (final url in candidateUrls) {
@@ -394,10 +488,12 @@ class DownloadProvider extends ChangeNotifier {
 
       // 2. Handle outcome: Never fake large remote documents
       if (!downloadedFromRemote) {
-        if (task.totalBytes > 1024 * 1024 || (task.course.channelId > 0 && task.userPhone.isNotEmpty)) {
+        if (task.totalBytes > 1024 * 1024 ||
+            (task.course.channelId > 0 && task.userPhone.isNotEmpty)) {
           task.isDownloading = false;
           task.isCompleted = false;
-          task.error = lastError ?? 'Download failed: unable to fetch file from Telegram server';
+          task.error = lastError ??
+              'Download failed: unable to fetch file from Telegram server';
           notifyListeners();
           return;
         }
@@ -408,7 +504,8 @@ class DownloadProvider extends ChangeNotifier {
         final bodyBuffer = StringBuffer();
         bodyBuffer.writeln('Study Document: $title');
         bodyBuffer.writeln('Course: ${task.course.title}');
-        bodyBuffer.writeln('Saved on: ${DateTime.now().toLocal().toString().split('.')[0]}');
+        bodyBuffer.writeln(
+            'Saved on: ${DateTime.now().toLocal().toString().split('.')[0]}');
         bodyBuffer.writeln('');
         if (noteText.isNotEmpty) {
           bodyBuffer.writeln('--- Notes & Key Takeaways ---');
@@ -424,7 +521,8 @@ class DownloadProvider extends ChangeNotifier {
         noteContent = fullText;
 
         if (ext.toLowerCase() == '.pdf') {
-          final pdfBytes = _buildValidPdfBytes(title, task.course.title, fullText);
+          final pdfBytes =
+              _buildValidPdfBytes(title, task.course.title, fullText);
           await destinationFile.writeAsBytes(pdfBytes);
           actualSize = destinationFile.lengthSync();
         } else {
@@ -460,7 +558,10 @@ class DownloadProvider extends ChangeNotifier {
       );
 
       await AppDatabase.instance.saveDownload(downloadModel);
-      _downloads.removeWhere((d) => d.courseId == task.courseId && d.itemId == task.itemId && d.mediaType == 'note');
+      _downloads.removeWhere((d) =>
+          d.courseId == task.courseId &&
+          d.itemId == task.itemId &&
+          d.mediaType == 'note');
       _downloads.insert(0, downloadModel);
       _activeTasks.remove(key);
       notifyListeners();
@@ -474,7 +575,8 @@ class DownloadProvider extends ChangeNotifier {
   }
 
   /// Builds a 100% compliant standard PDF 1.4 document from text
-  List<int> _buildValidPdfBytes(String title, String courseTitle, String content) {
+  List<int> _buildValidPdfBytes(
+      String title, String courseTitle, String content) {
     final bytes = <int>[];
     final offsets = <int>[];
 
@@ -491,7 +593,8 @@ class DownloadProvider extends ChangeNotifier {
 
     // 2. Pages Parent (Object 2)
     offsets.add(bytes.length);
-    writeString('2 0 obj\r\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\r\nendobj\r\n');
+    writeString(
+        '2 0 obj\r\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\r\nendobj\r\n');
 
     // Prepare text content stream
     final cleanTitle = title.replaceAll(RegExp(r'[\\()]'), '');
@@ -513,7 +616,8 @@ class DownloadProvider extends ChangeNotifier {
     streamContent.writeln('(TeleLearn Offline Study Document) Tj');
 
     streamContent.writeln('0 -20 Td');
-    streamContent.writeln('-------------------------------------------------------------------------------- Tj');
+    streamContent.writeln(
+        '-------------------------------------------------------------------------------- Tj');
 
     streamContent.writeln('/F1 11 Tf');
     streamContent.writeln('0 -22 Td');
@@ -544,7 +648,8 @@ class DownloadProvider extends ChangeNotifier {
 
     // 3. Page Object (Object 3)
     offsets.add(bytes.length);
-    writeString('3 0 obj\r\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\r\nendobj\r\n');
+    writeString(
+        '3 0 obj\r\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\r\nendobj\r\n');
 
     // 4. Content Stream (Object 4)
     offsets.add(bytes.length);
@@ -554,7 +659,8 @@ class DownloadProvider extends ChangeNotifier {
 
     // 5. Font Object (Object 5)
     offsets.add(bytes.length);
-    writeString('5 0 obj\r\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\r\nendobj\r\n');
+    writeString(
+        '5 0 obj\r\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\r\nendobj\r\n');
 
     // 6. XRef Table with exact 20-byte entries per ISO standard
     final xrefOffset = bytes.length;
@@ -564,13 +670,15 @@ class DownloadProvider extends ChangeNotifier {
       writeString('${offset.toString().padLeft(10, '0')} 00000 n \r\n');
     }
 
-    writeString('trailer\r\n<< /Size 6 /Root 1 0 R >>\r\nstartxref\r\n$xrefOffset\r\n%%EOF\r\n');
+    writeString(
+        'trailer\r\n<< /Size 6 /Root 1 0 R >>\r\nstartxref\r\n$xrefOffset\r\n%%EOF\r\n');
 
     return bytes;
   }
 
   /// Pause an active download
-  void pauseDownload(String courseId, int itemId, [String mediaType = 'video']) {
+  void pauseDownload(String courseId, int itemId,
+      [String mediaType = 'video']) {
     final key = _taskKey(courseId, itemId, mediaType);
     final task = _activeTasks[key];
     if (task != null && task.isDownloading) {
@@ -582,7 +690,8 @@ class DownloadProvider extends ChangeNotifier {
   }
 
   /// Resume a paused download
-  void resumeDownload(String courseId, int itemId, [String mediaType = 'video']) {
+  void resumeDownload(String courseId, int itemId,
+      [String mediaType = 'video']) {
     final key = _taskKey(courseId, itemId, mediaType);
     final task = _activeTasks[key];
     if (task != null && task.isPaused) {
@@ -600,7 +709,8 @@ class DownloadProvider extends ChangeNotifier {
   }
 
   /// Cancel and delete an active or paused download
-  Future<void> cancelDownload(String courseId, int itemId, [String mediaType = 'video']) async {
+  Future<void> cancelDownload(String courseId, int itemId,
+      [String mediaType = 'video']) async {
     final key = _taskKey(courseId, itemId, mediaType);
     final task = _activeTasks[key];
     if (task != null) {
@@ -613,11 +723,15 @@ class DownloadProvider extends ChangeNotifier {
         final phoneDir = task.userPhone.replaceAll('+', '').replaceAll(' ', '');
         final folder = mediaType == 'video' ? 'videos' : 'notes';
         final ext = mediaType == 'video' ? '.mp4' : '.pdf';
-        final fileName = mediaType == 'video' ? '${courseId}_$itemId$ext' : 'note_${courseId}_$itemId$ext';
-        final file = File(p.join(appDir.path, 'downloads', phoneDir, folder, fileName));
+        final fileName = mediaType == 'video'
+            ? '${courseId}_$itemId$ext'
+            : 'note_${courseId}_$itemId$ext';
+        final file =
+            File(p.join(appDir.path, 'downloads', phoneDir, folder, fileName));
         if (file.existsSync()) await file.delete();
 
-        final tempFile = File(p.join(appDir.path, 'downloads', phoneDir, folder, '$fileName.download.tmp'));
+        final tempFile = File(p.join(appDir.path, 'downloads', phoneDir, folder,
+            '$fileName.download.tmp'));
         if (tempFile.existsSync()) await tempFile.delete();
       } catch (_) {}
 
@@ -640,7 +754,8 @@ class DownloadProvider extends ChangeNotifier {
 
     // Standard high-speed browser headers (Matches Web Browser Speed)
     const browserHeaders = {
-      'User-Agent': 'TeleLearnDownloader/2.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
+      'User-Agent':
+          'TeleLearnDownloader/2.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
       'Accept': '*/*',
       'Accept-Encoding': 'identity',
       'Connection': 'keep-alive',
@@ -661,14 +776,17 @@ class DownloadProvider extends ChangeNotifier {
           final probeReq = http.Request('GET', uri);
           probeReq.headers.addAll(browserHeaders);
           probeReq.headers['range'] = 'bytes=0-0';
-          final probeRes = await probeClient.send(probeReq).timeout(const Duration(seconds: 10));
+          final probeRes = await probeClient
+              .send(probeReq)
+              .timeout(const Duration(seconds: 10));
           if (probeRes.statusCode == 206) {
             final contentRange = probeRes.headers['content-range'] ?? '';
             final totalMatch = RegExp(r'/(\d+)').firstMatch(contentRange);
             if (totalMatch != null) {
               totalBytes = int.parse(totalMatch.group(1)!);
             }
-          } else if (probeRes.statusCode == 200 && (probeRes.contentLength ?? 0) > 0) {
+          } else if (probeRes.statusCode == 200 &&
+              (probeRes.contentLength ?? 0) > 0) {
             totalBytes = probeRes.contentLength!;
           }
           await probeRes.stream.drain();
@@ -684,7 +802,9 @@ class DownloadProvider extends ChangeNotifier {
     const int parallelThreshold = 5 * 1024 * 1024; // 5 MB
     final int existingBytes = tempFile.existsSync() ? tempFile.lengthSync() : 0;
     final isLocalServer = uri.host == '127.0.0.1' || uri.host == 'localhost';
-    if (!isLocalServer && totalBytes > parallelThreshold && existingBytes == 0) {
+    if (!isLocalServer &&
+        totalBytes > parallelThreshold &&
+        existingBytes == 0) {
       try {
         final result = await _executeDualStreamDownload(
           uri: uri,
@@ -697,7 +817,8 @@ class DownloadProvider extends ChangeNotifier {
         if (result > 0) return result;
         if (task.isCancelled || task.isPaused) return 0;
       } catch (e) {
-        debugPrint('[DownloadProvider] Dual-stream failed, falling back to single-stream: $e');
+        debugPrint(
+            '[DownloadProvider] Dual-stream failed, falling back to single-stream: $e');
         if (task.isCancelled || task.isPaused) return 0;
       }
     }
@@ -744,13 +865,15 @@ class DownloadProvider extends ChangeNotifier {
             ? currentSpeed
             : (task.speedBytesPerSec * 0.35 + currentSpeed * 0.65);
         if (task.speedBytesPerSec > 0 && totalBytes > totalReceived) {
-          task.remainingSeconds = ((totalBytes - totalReceived) / task.speedBytesPerSec).round();
+          task.remainingSeconds =
+              ((totalBytes - totalReceived) / task.speedBytesPerSec).round();
         }
         lastSpeedTime = now;
         bytesAtLastSpeed = totalReceived;
       }
 
-      if (now.difference(lastUiUpdate).inMilliseconds > 500 || totalReceived >= totalBytes) {
+      if (now.difference(lastUiUpdate).inMilliseconds > 500 ||
+          totalReceived >= totalBytes) {
         lastUiUpdate = now;
         task.progress = (totalReceived / totalBytes).clamp(0.0, 1.0);
         notifyListeners();
@@ -763,9 +886,13 @@ class DownloadProvider extends ChangeNotifier {
         final req = http.Request('GET', uri);
         req.headers.addAll(headers);
         req.headers['range'] = 'bytes=$start-$end';
-        final response = await client.send(req).timeout(const Duration(seconds: 25));
+        final response =
+            await client.send(req).timeout(const Duration(seconds: 25));
         if (response.statusCode >= 400) {
           throw Exception('HTTP ${response.statusCode} for range $start-$end');
+        }
+        if (response.statusCode != 206) {
+          throw Exception('Server did not honor range request for $start-$end');
         }
 
         final sink = outputFile.openWrite(mode: FileMode.write);
@@ -802,9 +929,14 @@ class DownloadProvider extends ChangeNotifier {
     if (task.isCancelled || task.isPaused) return 0;
 
     if (results[0] <= 0 || results[1] <= 0) {
-      try { if (part1File.existsSync()) await part1File.delete(); } catch (_) {}
-      try { if (part2File.existsSync()) await part2File.delete(); } catch (_) {}
-      throw Exception('Dual-stream download incomplete: part1=${results[0]}, part2=${results[1]}');
+      try {
+        if (part1File.existsSync()) await part1File.delete();
+      } catch (_) {}
+      try {
+        if (part2File.existsSync()) await part2File.delete();
+      } catch (_) {}
+      throw Exception(
+          'Dual-stream download incomplete: part1=${results[0]}, part2=${results[1]}');
     }
 
     final sink = destinationFile.openWrite(mode: FileMode.write);
@@ -813,8 +945,12 @@ class DownloadProvider extends ChangeNotifier {
     await sink.flush();
     await sink.close();
 
-    try { if (part1File.existsSync()) await part1File.delete(); } catch (_) {}
-    try { if (part2File.existsSync()) await part2File.delete(); } catch (_) {}
+    try {
+      if (part1File.existsSync()) await part1File.delete();
+    } catch (_) {}
+    try {
+      if (part2File.existsSync()) await part2File.delete();
+    } catch (_) {}
 
     return destinationFile.lengthSync();
   }
@@ -838,7 +974,8 @@ class DownloadProvider extends ChangeNotifier {
       task.currentClient = client;
 
       try {
-        final int existingBytes = tempFile.existsSync() ? tempFile.lengthSync() : 0;
+        final int existingBytes =
+            tempFile.existsSync() ? tempFile.lengthSync() : 0;
         final req = http.Request('GET', uri);
         req.headers.addAll(headers);
 
@@ -846,7 +983,8 @@ class DownloadProvider extends ChangeNotifier {
           req.headers['range'] = 'bytes=$existingBytes-';
         }
 
-        final response = await client.send(req).timeout(const Duration(seconds: 45));
+        final response =
+            await client.send(req).timeout(const Duration(seconds: 45));
         if (response.statusCode >= 400 && response.statusCode != 416) {
           throw Exception('Server returned HTTP ${response.statusCode}');
         }
@@ -882,7 +1020,8 @@ class DownloadProvider extends ChangeNotifier {
         }
         notifyListeners();
 
-        final sink = tempFile.openWrite(mode: isPartial ? FileMode.append : FileMode.write);
+        final sink = tempFile.openWrite(
+            mode: isPartial ? FileMode.append : FileMode.write);
         DateTime lastUiUpdate = DateTime.now();
         DateTime lastSpeedTime = DateTime.now();
         int bytesAtLastSpeed = receivedBytes;
@@ -908,13 +1047,16 @@ class DownloadProvider extends ChangeNotifier {
                 ? currentSpeed
                 : (task.speedBytesPerSec * 0.35 + currentSpeed * 0.65);
             if (task.speedBytesPerSec > 0 && totalBytes > receivedBytes) {
-              task.remainingSeconds = ((totalBytes - receivedBytes) / task.speedBytesPerSec).round();
+              task.remainingSeconds =
+                  ((totalBytes - receivedBytes) / task.speedBytesPerSec)
+                      .round();
             }
             lastSpeedTime = now;
             bytesAtLastSpeed = receivedBytes;
           }
 
-          if (now.difference(lastUiUpdate).inMilliseconds > 500 || receivedBytes >= totalBytes) {
+          if (now.difference(lastUiUpdate).inMilliseconds > 500 ||
+              receivedBytes >= totalBytes) {
             lastUiUpdate = now;
             if (totalBytes > 0) {
               task.progress = (receivedBytes / totalBytes).clamp(0.0, 1.0);
@@ -928,7 +1070,8 @@ class DownloadProvider extends ChangeNotifier {
 
         if (task.isCancelled || task.isPaused) return 0;
 
-        final writtenSize = tempFile.existsSync() ? tempFile.lengthSync() : receivedBytes;
+        final writtenSize =
+            tempFile.existsSync() ? tempFile.lengthSync() : receivedBytes;
         if (writtenSize < 10) {
           throw Exception('Downloaded file is incomplete ($writtenSize bytes)');
         }
@@ -942,7 +1085,8 @@ class DownloadProvider extends ChangeNotifier {
       } catch (e) {
         if (task.isCancelled || task.isPaused) return 0;
         retryCount++;
-        debugPrint('[DownloadProvider] Network interrupted (attempt $retryCount/$maxRetries): $e. Retrying in ${retryCount * 2}s...');
+        debugPrint(
+            '[DownloadProvider] Network interrupted (attempt $retryCount/$maxRetries): $e. Retrying in ${retryCount * 2}s...');
         if (retryCount >= maxRetries) {
           rethrow;
         }
@@ -962,10 +1106,14 @@ class DownloadProvider extends ChangeNotifier {
     required int lessonId,
   }) async {
     try {
-      final thumbDir = Directory(p.join(appDirPath, 'downloads', phoneDir, 'thumbnails'));
+      final thumbDir =
+          Directory(p.join(appDirPath, 'downloads', phoneDir, 'thumbnails'));
       if (!thumbDir.existsSync()) thumbDir.createSync(recursive: true);
-      final thumbFile = File(p.join(thumbDir.path, 'thumb_${courseId}_$lessonId.jpg'));
-      final res = await http.get(Uri.parse(thumbnailUrl)).timeout(const Duration(seconds: 10));
+      final thumbFile =
+          File(p.join(thumbDir.path, 'thumb_${courseId}_$lessonId.jpg'));
+      final res = await http
+          .get(Uri.parse(thumbnailUrl))
+          .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
         await thumbFile.writeAsBytes(res.bodyBytes);
         return thumbFile.path;
@@ -974,7 +1122,8 @@ class DownloadProvider extends ChangeNotifier {
     return null;
   }
 
-  Future<void> deleteDownload(String courseId, int itemId, {String mediaType = 'video', String userPhone = ''}) async {
+  Future<void> deleteDownload(String courseId, int itemId,
+      {String mediaType = 'video', String userPhone = ''}) async {
     try {
       final record = getDownloadRecord(courseId, itemId, mediaType);
       if (record != null) {
@@ -992,7 +1141,10 @@ class DownloadProvider extends ChangeNotifier {
           mediaType: mediaType,
           userPhone: userPhone.isNotEmpty ? userPhone : _activeUserPhone,
         );
-        _downloads.removeWhere((d) => d.courseId == courseId && d.itemId == itemId && d.mediaType == mediaType);
+        _downloads.removeWhere((d) =>
+            d.courseId == courseId &&
+            d.itemId == itemId &&
+            d.mediaType == mediaType);
         notifyListeners();
       }
     } catch (e) {

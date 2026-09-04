@@ -36,9 +36,23 @@ class TelegramChannelInfo {
       isGroup: map['is_group'] == true,
       memberCount: map['member_count'] ?? map['participants_count'] ?? 0,
       messageCount: map['message_count'] ?? 0,
-      accessHash: map['access_hash'] is int ? map['access_hash'] : (map['access_hash'] != null ? int.tryParse('${map['access_hash']}') : null),
+      accessHash: map['access_hash'] is int
+          ? map['access_hash']
+          : (map['access_hash'] != null
+              ? int.tryParse('${map['access_hash']}')
+              : null),
     );
   }
+}
+
+class TelegramModuleRefreshResult {
+  final List<CourseLesson> lessons;
+  final List<CourseNote> notes;
+
+  const TelegramModuleRefreshResult({
+    required this.lessons,
+    required this.notes,
+  });
 }
 
 class TelegramImportService {
@@ -52,32 +66,18 @@ class TelegramImportService {
   }
 
   /// Fetch user's real Telegram channels & supergroups directly via active MTProto session
-  static Future<List<TelegramChannelInfo>> getAvailableChannels(String phone) async {
+  static Future<List<TelegramChannelInfo>> getAvailableChannels(
+      String phone) async {
     final cleanPhone = phone.trim();
     if (cleanPhone.isEmpty) return [];
 
-    debugPrint('[TelegramImportService] 🔍 Fetching real Telegram channels/groups for $cleanPhone');
+    debugPrint(
+        '[TelegramImportService] 🔍 Fetching real Telegram channels/groups for $cleanPhone');
 
     try {
       final client = await TelegramAuthService.getClient();
-      final res = await client.messages.getDialogs(
-        excludePinned: false,
-        folderId: null,
-        offsetDate: DateTime.fromMillisecondsSinceEpoch(0),
-        offsetId: 0,
-        offsetPeer: const t.InputPeerEmpty(),
-        limit: 100,
-        hash: 0,
-      ).timeout(const Duration(seconds: 25));
-
-      if (res.error != null) {
-        final err = res.error!.errorMessage;
-        debugPrint('[TelegramImportService] getDialogs RPC error: ${res.error!.errorCode} - $err');
-        if (TelegramAuthService.isMigrateError(err)) {
-          final targetDc = TelegramAuthService.extractDcFromMigrateError(err);
-          debugPrint('[TelegramImportService] Migrating to DC $targetDc for getDialogs...');
-          final migratedClient = await TelegramAuthService.getClient(dcId: targetDc);
-          final retryRes = await migratedClient.messages.getDialogs(
+      final res = await client.messages
+          .getDialogs(
             excludePinned: false,
             folderId: null,
             offsetDate: DateTime.fromMillisecondsSinceEpoch(0),
@@ -85,12 +85,36 @@ class TelegramImportService {
             offsetPeer: const t.InputPeerEmpty(),
             limit: 100,
             hash: 0,
-          ).timeout(const Duration(seconds: 25));
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if (res.error != null) {
+        final err = res.error!.errorMessage;
+        debugPrint(
+            '[TelegramImportService] getDialogs RPC error: ${res.error!.errorCode} - $err');
+        if (TelegramAuthService.isMigrateError(err)) {
+          final targetDc = TelegramAuthService.extractDcFromMigrateError(err);
+          debugPrint(
+              '[TelegramImportService] Migrating to DC $targetDc for getDialogs...');
+          final migratedClient =
+              await TelegramAuthService.getClient(dcId: targetDc);
+          final retryRes = await migratedClient.messages
+              .getDialogs(
+                excludePinned: false,
+                folderId: null,
+                offsetDate: DateTime.fromMillisecondsSinceEpoch(0),
+                offsetId: 0,
+                offsetPeer: const t.InputPeerEmpty(),
+                limit: 100,
+                hash: 0,
+              )
+              .timeout(const Duration(seconds: 25));
           return _parseDialogsResult(retryRes);
         } else if (err.contains('AUTH_KEY_UNREGISTERED') ||
             err.contains('AUTH_KEY_INVALID') ||
             err.contains('SESSION_REVOKED')) {
-          debugPrint('[TelegramImportService] User Telegram session is expired / not authorized ($err)');
+          debugPrint(
+              '[TelegramImportService] User Telegram session is expired / not authorized ($err)');
           return [];
         }
       }
@@ -102,7 +126,8 @@ class TelegramImportService {
     }
   }
 
-  static List<TelegramChannelInfo> _parseDialogsResult(t.Result<t.MessagesDialogsBase> res) {
+  static List<TelegramChannelInfo> _parseDialogsResult(
+      t.Result<t.MessagesDialogsBase> res) {
     final List<TelegramChannelInfo> realChannels = [];
     final List<t.ChatBase> chats = [];
 
@@ -112,14 +137,16 @@ class TelegramImportService {
       chats.addAll((res.result as t.MessagesDialogsSlice).chats);
     }
 
-    debugPrint('[TelegramImportService] Parsed ${chats.length} raw chats from Telegram getDialogs');
+    debugPrint(
+        '[TelegramImportService] Parsed ${chats.length} raw chats from Telegram getDialogs');
 
     for (final chat in chats) {
       if (chat is t.Channel) {
         if (chat.accessHash != null) {
           _channelAccessHashMap[chat.id] = chat.accessHash!;
         }
-        debugPrint('   📺 Channel: id=${chat.id}, title="${chat.title}", broadcast=${chat.broadcast}, megagroup=${chat.megagroup}, participants=${chat.participantsCount}');
+        debugPrint(
+            '   📺 Channel: id=${chat.id}, title="${chat.title}", broadcast=${chat.broadcast}, megagroup=${chat.megagroup}, participants=${chat.participantsCount}');
         realChannels.add(TelegramChannelInfo(
           id: chat.id,
           name: chat.title,
@@ -129,7 +156,8 @@ class TelegramImportService {
           accessHash: chat.accessHash,
         ));
       } else if (chat is t.Chat) {
-        debugPrint('   👥 Group: id=${chat.id}, title="${chat.title}", participants=${chat.participantsCount}');
+        debugPrint(
+            '   👥 Group: id=${chat.id}, title="${chat.title}", participants=${chat.participantsCount}');
         realChannels.add(TelegramChannelInfo(
           id: chat.id,
           name: chat.title,
@@ -141,13 +169,19 @@ class TelegramImportService {
       }
     }
 
-    debugPrint('[TelegramImportService] ✅ Total valid channels/groups found: ${realChannels.length}');
+    debugPrint(
+        '[TelegramImportService] ✅ Total valid channels/groups found: ${realChannels.length}');
     return realChannels;
   }
 
   /// Resolve public Telegram channel username (e.g. @flutter_dev or t.me/flutter_dev)
-  static Future<TelegramChannelInfo?> resolvePublicChannel(String username) async {
-    var clean = username.trim().replaceAll('https://t.me/', '').replaceAll('t.me/', '').replaceAll('@', '');
+  static Future<TelegramChannelInfo?> resolvePublicChannel(
+      String username) async {
+    var clean = username
+        .trim()
+        .replaceAll('https://t.me/', '')
+        .replaceAll('t.me/', '')
+        .replaceAll('@', '');
     if (clean.isEmpty) return null;
 
     try {
@@ -195,11 +229,12 @@ class TelegramImportService {
     void Function(int fetched, int? total)? onProgress,
   }) async {
     final sw = Stopwatch()..start();
-    debugPrint('[TelegramImportService] 🚀 Starting fast sync for channel $channelId ($channelName, accessHash: $accessHash)');
+    debugPrint(
+        '[TelegramImportService] 🚀 Starting fast sync for channel $channelId ($channelName, accessHash: $accessHash)');
 
     try {
       var client = await TelegramAuthService.getClient();
-      
+
       int? effectiveAccessHash = accessHash ?? _channelAccessHashMap[channelId];
       if (effectiveAccessHash == null) {
         final channels = await getAvailableChannels(phone);
@@ -212,7 +247,8 @@ class TelegramImportService {
 
       t.InputPeerBase peer;
       if (effectiveAccessHash != null) {
-        peer = t.InputPeerChannel(channelId: channelId, accessHash: effectiveAccessHash);
+        peer = t.InputPeerChannel(
+            channelId: channelId, accessHash: effectiveAccessHash);
       } else {
         peer = t.InputPeerChat(chatId: channelId);
       }
@@ -232,16 +268,20 @@ class TelegramImportService {
           );
           if (topicsRes.error != null) {
             final err = topicsRes.error!.errorMessage;
-            debugPrint('[TelegramImportService] ⚠️ getForumTopics note: ${topicsRes.error!.errorCode} - $err');
+            debugPrint(
+                '[TelegramImportService] ⚠️ getForumTopics note: ${topicsRes.error!.errorCode} - $err');
             if (TelegramAuthService.isMigrateError(err)) {
-              final targetDc = TelegramAuthService.extractDcFromMigrateError(err);
-              client = await TelegramAuthService.getClient(dcId: targetDc, forceNew: true);
+              final targetDc =
+                  TelegramAuthService.extractDcFromMigrateError(err);
+              client = await TelegramAuthService.getClient(
+                  dcId: targetDc, forceNew: true);
               continue;
             }
             break;
           }
           if (topicsRes.result is t.MessagesForumTopics) {
-            final forumTopics = (topicsRes.result as t.MessagesForumTopics).topics;
+            final forumTopics =
+                (topicsRes.result as t.MessagesForumTopics).topics;
             if (forumTopics.isEmpty) break;
             for (final top in forumTopics) {
               if (top is t.ForumTopic && top.title.trim().isNotEmpty) {
@@ -260,7 +300,8 @@ class TelegramImportService {
             break;
           }
         }
-        debugPrint('[TelegramImportService] 📂 Discovered ${topicsMap.length} forum topics/sub-modules:');
+        debugPrint(
+            '[TelegramImportService] 📂 Discovered ${topicsMap.length} forum topics/sub-modules:');
         topicsMap.forEach((tid, tTitle) {
           debugPrint('   ↳ [Topic #$tid] "$tTitle"');
         });
@@ -269,7 +310,8 @@ class TelegramImportService {
       }
 
       final appDir = await getApplicationDocumentsDirectory();
-      final stagingFile = File(p.join(appDir.path, 'tg_staging_$channelId.jsonl'));
+      final stagingFile =
+          File(p.join(appDir.path, 'tg_staging_$channelId.jsonl'));
       if (stagingFile.existsSync()) {
         try {
           stagingFile.deleteSync();
@@ -298,11 +340,14 @@ class TelegramImportService {
 
         if (historyRes.error != null) {
           final err = historyRes.error!.errorMessage;
-          debugPrint('[TelegramImportService] ❌ getHistory error: ${historyRes.error!.errorCode} - $err');
+          debugPrint(
+              '[TelegramImportService] ❌ getHistory error: ${historyRes.error!.errorCode} - $err');
           if (TelegramAuthService.isMigrateError(err)) {
             final targetDc = TelegramAuthService.extractDcFromMigrateError(err);
-            debugPrint('[TelegramImportService] Migrating to DC $targetDc for getHistory...');
-            client = await TelegramAuthService.getClient(dcId: targetDc, forceNew: true);
+            debugPrint(
+                '[TelegramImportService] Migrating to DC $targetDc for getHistory...');
+            client = await TelegramAuthService.getClient(
+                dcId: targetDc, forceNew: true);
             continue;
           }
           break;
@@ -323,7 +368,8 @@ class TelegramImportService {
 
         if (batch.isEmpty) break;
         totalFetchedCount += batch.length;
-        debugPrint('[TelegramImportService] 📥 History batch: +${batch.length} messages (Total processed: $totalFetchedCount${totalChannelCount != null ? ' / $totalChannelCount' : ''})');
+        debugPrint(
+            '[TelegramImportService] 📥 History batch: +${batch.length} messages (Total processed: $totalFetchedCount${totalChannelCount != null ? ' / $totalChannelCount' : ''})');
 
         final List<_ParsedMediaItem> batchItems = [];
 
@@ -345,20 +391,26 @@ class TelegramImportService {
             int topicId = 0;
             if (m.replyTo is t.MessageReplyHeader) {
               final replyHeader = m.replyTo as t.MessageReplyHeader;
-              if (replyHeader.replyToTopId != null && replyHeader.replyToTopId! > 0) {
+              if (replyHeader.replyToTopId != null &&
+                  replyHeader.replyToTopId! > 0) {
                 topicId = replyHeader.replyToTopId!;
-              } else if (replyHeader.forumTopic && replyHeader.replyToMsgId != null && replyHeader.replyToMsgId! > 0) {
+              } else if (replyHeader.forumTopic &&
+                  replyHeader.replyToMsgId != null &&
+                  replyHeader.replyToMsgId! > 0) {
                 topicId = replyHeader.replyToMsgId!;
-              } else if (replyHeader.replyToMsgId != null && messageToTopicMap.containsKey(replyHeader.replyToMsgId)) {
+              } else if (replyHeader.replyToMsgId != null &&
+                  messageToTopicMap.containsKey(replyHeader.replyToMsgId)) {
                 topicId = messageToTopicMap[replyHeader.replyToMsgId]!;
-              } else if (replyHeader.replyToMsgId != null && topicsMap.containsKey(replyHeader.replyToMsgId)) {
+              } else if (replyHeader.replyToMsgId != null &&
+                  topicsMap.containsKey(replyHeader.replyToMsgId)) {
                 topicId = replyHeader.replyToMsgId!;
               }
             }
             messageToTopicMap[m.id] = topicId;
 
             final media = m.media;
-            if (media is t.MessageMediaDocument && media.document is t.Document) {
+            if (media is t.MessageMediaDocument &&
+                media.document is t.Document) {
               final doc = media.document as t.Document;
               final mime = doc.mimeType.toLowerCase();
 
@@ -378,19 +430,29 @@ class TelegramImportService {
               if (mime.startsWith('video/') ||
                   mime == 'application/octet-stream' ||
                   mime == 'video/x-matroska') {
-                if (fileName != null && (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.mov') || fileName.endsWith('.webm') || fileName.endsWith('.avi'))) {
+                if (fileName != null &&
+                    (fileName.endsWith('.mp4') ||
+                        fileName.endsWith('.mkv') ||
+                        fileName.endsWith('.mov') ||
+                        fileName.endsWith('.webm') ||
+                        fileName.endsWith('.avi'))) {
                   isVideo = true;
                 }
               }
 
               if (fileName == null || fileName.trim().isEmpty) {
                 final firstLine = m.message.trim().split('\n').first;
-                fileName = firstLine.isNotEmpty ? (firstLine.length > 80 ? '${firstLine.substring(0, 77)}...' : firstLine) : (isVideo ? 'Lesson ${m.id}' : 'Note ${m.id}');
+                fileName = firstLine.isNotEmpty
+                    ? (firstLine.length > 80
+                        ? '${firstLine.substring(0, 77)}...'
+                        : firstLine)
+                    : (isVideo ? 'Lesson ${m.id}' : 'Note ${m.id}');
               }
 
               final cleanName = _cleanTitle(fileName);
               final fileRefHex = _bytesToHex(doc.fileReference);
-              final streamUrl = 'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${doc.dcId}&doc_id=${doc.id}&access_hash=${doc.accessHash}&size=${doc.size}&mime=${Uri.encodeComponent(doc.mimeType)}&file_ref=$fileRefHex';
+              final streamUrl =
+                  'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${doc.dcId}&doc_id=${doc.id}&access_hash=${doc.accessHash}&size=${doc.size}&mime=${Uri.encodeComponent(doc.mimeType)}&file_ref=$fileRefHex';
 
               batchItems.add(_ParsedMediaItem(
                 id: m.id,
@@ -405,7 +467,9 @@ class TelegramImportService {
               ));
             } else if (media is t.MessageMediaPhoto) {
               final firstLine = m.message.trim().split('\n').first;
-              final photoTitle = firstLine.isNotEmpty ? _cleanTitle(firstLine) : 'Photo Note ${m.id}';
+              final photoTitle = firstLine.isNotEmpty
+                  ? _cleanTitle(firstLine)
+                  : 'Photo Note ${m.id}';
               batchItems.add(_ParsedMediaItem(
                 id: m.id,
                 topicId: topicId,
@@ -453,7 +517,8 @@ class TelegramImportService {
         // Cooperative yield: 60ms gives Flutter UI plenty of time to render 120 FPS animations smoothly
         await Future<void>.delayed(const Duration(milliseconds: 60));
 
-        if (totalChannelCount != null && totalFetchedCount >= totalChannelCount) break;
+        if (totalChannelCount != null && totalFetchedCount >= totalChannelCount)
+          break;
 
         if (minId == 0x7FFFFFFF || (minId >= offsetId && offsetId != 0)) {
           break;
@@ -467,7 +532,8 @@ class TelegramImportService {
         final lines = await stagingFile.readAsLines();
         for (final line in lines) {
           if (line.trim().isNotEmpty) {
-            parsedItems.add(_ParsedMediaItem.fromMap(jsonDecode(line) as Map<String, dynamic>));
+            parsedItems.add(_ParsedMediaItem.fromMap(
+                jsonDecode(line) as Map<String, dynamic>));
           }
         }
         try {
@@ -494,7 +560,8 @@ class TelegramImportService {
       for (int i = 0; i < parsedItems.length; i++) {
         final item = parsedItems[i];
         final topicId = item.topicId;
-        final topicTitle = topicsMap[topicId] ?? (topicId == 0 ? 'General' : 'Topic #$topicId');
+        final topicTitle = topicsMap[topicId] ??
+            (topicId == 0 ? 'General' : 'Topic #$topicId');
 
         if (!modulesDict.containsKey(topicId)) {
           modulesDict[topicId] = {
@@ -503,7 +570,10 @@ class TelegramImportService {
             'lessons': <CourseLesson>[],
             'notes': <CourseNote>[],
           };
-        } else if (modulesDict[topicId]!['title'].toString().startsWith('Topic #') && topicsMap.containsKey(topicId)) {
+        } else if (modulesDict[topicId]!['title']
+                .toString()
+                .startsWith('Topic #') &&
+            topicsMap.containsKey(topicId)) {
           modulesDict[topicId]!['title'] = topicsMap[topicId]!;
         }
 
@@ -523,7 +593,9 @@ class TelegramImportService {
             fileName: item.fileName,
             fileUrl: item.streamUrl,
             size: item.size,
-            text: item.text.isNotEmpty ? item.text : 'Reference document from Telegram channel',
+            text: item.text.isNotEmpty
+                ? item.text
+                : 'Reference document from Telegram channel',
           );
           (modulesDict[topicId]!['notes'] as List<CourseNote>).add(note);
         }
@@ -532,10 +604,12 @@ class TelegramImportService {
       // Filter and sort modules (General/Topic 0 first, then topic ID ascending)
       // Keep modules that have content OR are designated forum topics (ID > 0)
       final List<CourseModule> parsedModules = [];
-      final activeEntries = modulesDict.values.where((m) =>
-          (m['lessons'] as List).isNotEmpty || 
-          (m['notes'] as List).isNotEmpty ||
-          (topicsMap.containsKey(m['id']) && (m['id'] as int) > 0)).toList();
+      final activeEntries = modulesDict.values
+          .where((m) =>
+              (m['lessons'] as List).isNotEmpty ||
+              (m['notes'] as List).isNotEmpty ||
+              (topicsMap.containsKey(m['id']) && (m['id'] as int) > 0))
+          .toList();
 
       activeEntries.sort((a, b) {
         final aId = a['id'] as int;
@@ -549,7 +623,9 @@ class TelegramImportService {
         final modId = entry['id'] as int;
         var modTitle = entry['title'].toString().trim();
         if (modTitle.isEmpty || modTitle.toLowerCase() == 'general') {
-          modTitle = activeEntries.length > 1 ? 'General & Overview' : (channelName ?? 'Lectures & Materials');
+          modTitle = activeEntries.length > 1
+              ? 'General & Overview'
+              : (channelName ?? 'Lectures & Materials');
         }
 
         parsedModules.add(CourseModule(
@@ -570,20 +646,25 @@ class TelegramImportService {
       }
 
       final title = channelName ?? 'Telegram Course #$channelId';
-      final totalLessons = parsedModules.fold<int>(0, (sum, m) => sum + m.lessons.length);
-      final totalNotes = parsedModules.fold<int>(0, (sum, m) => sum + m.notes.length);
+      final totalLessons =
+          parsedModules.fold<int>(0, (sum, m) => sum + m.lessons.length);
+      final totalNotes =
+          parsedModules.fold<int>(0, (sum, m) => sum + m.notes.length);
 
       debugPrint('[TelegramImportService] 📊 SYNC REPORT FOR "$title":');
       for (final mod in parsedModules) {
-        debugPrint('  📚 [Sub-Module: "${mod.title}" (ID: ${mod.id})] - ${mod.lessons.length} videos, ${mod.notes.length} notes');
+        debugPrint(
+            '  📚 [Sub-Module: "${mod.title}" (ID: ${mod.id})] - ${mod.lessons.length} videos, ${mod.notes.length} notes');
       }
-      debugPrint('🏁 Total: $totalLessons Video Lectures, $totalNotes Documents across ${parsedModules.length} Sub-Modules in ${sw.elapsedMilliseconds}ms');
+      debugPrint(
+          '🏁 Total: $totalLessons Video Lectures, $totalNotes Documents across ${parsedModules.length} Sub-Modules in ${sw.elapsedMilliseconds}ms');
 
       return CourseModel(
         id: '$channelId',
         channelId: channelId,
         title: title,
-        description: 'Synced from Telegram channel "$title". Contains $totalLessons video lectures and $totalNotes reference documents.',
+        description:
+            'Synced from Telegram channel "$title". Contains $totalLessons video lectures and $totalNotes reference documents.',
         modules: parsedModules,
         createdAt: DateTime.now(),
       );
@@ -593,20 +674,211 @@ class TelegramImportService {
     }
   }
 
+  /// Refresh only one Telegram media message. File references expire independently
+  /// of the course, so rebuilding the complete course is unnecessary for playback.
+  static Future<CourseLesson?> refreshLessonFromTelegram({
+    required String phone,
+    required int channelId,
+    required int lessonId,
+    int? accessHash,
+  }) async {
+    try {
+      final client = await TelegramAuthService.getClient();
+      var effectiveAccessHash = accessHash ?? _channelAccessHashMap[channelId];
+      if (effectiveAccessHash == null) {
+        final channels = await getAvailableChannels(phone);
+        effectiveAccessHash = channels
+            .where((channel) => channel.id == channelId)
+            .firstOrNull
+            ?.accessHash;
+      }
+      if (effectiveAccessHash != null) {
+        _channelAccessHashMap[channelId] = effectiveAccessHash;
+      }
+
+      final result = effectiveAccessHash != null
+          ? await client.channels.getMessages(
+              channel: t.InputChannel(
+                  channelId: channelId, accessHash: effectiveAccessHash),
+              id: [t.InputMessageID(id: lessonId)],
+            ).timeout(const Duration(seconds: 20))
+          : await client.messages.getMessages(
+              id: [t.InputMessageID(id: lessonId)],
+            ).timeout(const Duration(seconds: 20));
+
+      if (result.error != null || result.result == null) return null;
+      final messages = result.result!;
+      final message = messages is t.MessagesMessages
+          ? messages.messages
+              .whereType<t.Message>()
+              .where((item) => item.id == lessonId)
+              .firstOrNull
+          : messages is t.MessagesMessagesSlice
+              ? messages.messages
+                  .whereType<t.Message>()
+                  .where((item) => item.id == lessonId)
+                  .firstOrNull
+              : null;
+      if (message == null) return null;
+
+      final media = message.media;
+      if (media is! t.MessageMediaDocument || media.document is! t.Document)
+        return null;
+      final document = media.document as t.Document;
+      final fileRefHex = _bytesToHex(document.fileReference);
+      final streamUrl =
+          'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${document.dcId}&doc_id=${document.id}&access_hash=${document.accessHash}&size=${document.size}&mime=${Uri.encodeComponent(document.mimeType)}&file_ref=$fileRefHex';
+      var title = 'Lesson ${message.id}';
+      num duration = 0;
+      for (final attribute in document.attributes) {
+        if (attribute is t.DocumentAttributeFilename) {
+          title = _cleanTitle(attribute.fileName);
+        } else if (attribute is t.DocumentAttributeVideo) {
+          duration = attribute.duration;
+        }
+      }
+      return CourseLesson(
+        id: lessonId,
+        title: title,
+        duration: duration > 0 ? duration : (document.size ~/ (128 * 1024)),
+        size: document.size,
+        mimeType: document.mimeType,
+        videoUrl: streamUrl,
+      );
+    } catch (e) {
+      debugPrint('[TelegramImportService] Single lesson refresh failed: $e');
+      return null;
+    }
+  }
+
+  /// Refresh a forum topic in one Telegram request. The topic id is the
+  /// forum root message id used as the module id during course import.
+  static Future<TelegramModuleRefreshResult?> refreshModuleFromTelegram({
+    required String phone,
+    required int channelId,
+    required int moduleId,
+    int? accessHash,
+  }) async {
+    if (moduleId <= 0) return null;
+    try {
+      final client = await TelegramAuthService.getClient();
+      var effectiveAccessHash = accessHash ?? _channelAccessHashMap[channelId];
+      if (effectiveAccessHash == null) {
+        final channels = await getAvailableChannels(phone);
+        effectiveAccessHash = channels
+            .where((channel) => channel.id == channelId)
+            .firstOrNull
+            ?.accessHash;
+      }
+      if (effectiveAccessHash == null) return null;
+      _channelAccessHashMap[channelId] = effectiveAccessHash;
+
+      final peer = t.InputPeerChannel(
+          channelId: channelId, accessHash: effectiveAccessHash);
+      final result = await client.messages
+          .getReplies(
+            peer: peer,
+            msgId: moduleId,
+            offsetId: 0,
+            offsetDate: DateTime.fromMillisecondsSinceEpoch(0),
+            addOffset: 0,
+            limit: 100,
+            maxId: 0,
+            minId: 0,
+            hash: 0,
+          )
+          .timeout(const Duration(seconds: 25));
+      if (result.error != null || result.result == null) return null;
+
+      final messages = result.result!;
+      final rawMessages = messages is t.MessagesMessages
+          ? messages.messages
+          : messages is t.MessagesMessagesSlice
+              ? messages.messages
+              : messages is t.MessagesChannelMessages
+                  ? messages.messages
+                  : const <t.MessageBase>[];
+      final lessons = <CourseLesson>[];
+      final notes = <CourseNote>[];
+
+      for (final rawMessage in rawMessages) {
+        if (rawMessage is! t.Message ||
+            rawMessage.media is! t.MessageMediaDocument) {
+          continue;
+        }
+        final media = rawMessage.media as t.MessageMediaDocument;
+        if (media.document is! t.Document) continue;
+        final document = media.document as t.Document;
+        final fileRefHex = _bytesToHex(document.fileReference);
+        final streamUrl =
+            'http://127.0.0.1:${AppConstants.localProxyPort}/tg_stream?dc_id=${document.dcId}&doc_id=${document.id}&access_hash=${document.accessHash}&size=${document.size}&mime=${Uri.encodeComponent(document.mimeType)}&file_ref=$fileRefHex';
+        var title = 'Item ${rawMessage.id}';
+        String? fileName;
+        num duration = 0;
+        var isVideo = document.mimeType.toLowerCase().startsWith('video/');
+        for (final attribute in document.attributes) {
+          if (attribute is t.DocumentAttributeFilename) {
+            fileName = attribute.fileName;
+            title = _cleanTitle(attribute.fileName);
+          } else if (attribute is t.DocumentAttributeVideo) {
+            isVideo = true;
+            duration = attribute.duration;
+          }
+        }
+        if (isVideo) {
+          lessons.add(CourseLesson(
+            id: rawMessage.id,
+            title: title,
+            duration: duration > 0 ? duration : (document.size ~/ (128 * 1024)),
+            size: document.size,
+            mimeType: document.mimeType,
+            videoUrl: streamUrl,
+          ));
+        } else {
+          notes.add(CourseNote(
+            id: rawMessage.id,
+            title: title,
+            fileName: fileName,
+            size: document.size,
+            fileUrl: streamUrl,
+            text: rawMessage.message.trim(),
+          ));
+        }
+      }
+      lessons.sort((a, b) => a.id.compareTo(b.id));
+      notes.sort((a, b) => a.id.compareTo(b.id));
+      return TelegramModuleRefreshResult(lessons: lessons, notes: notes);
+    } catch (e) {
+      debugPrint('[TelegramImportService] Module refresh failed: $e');
+      return null;
+    }
+  }
 
   static String _cleanTitle(String rawTitle) {
     var title = rawTitle.trim();
     if (title.isEmpty) return 'Untitled Lesson';
 
     // Remove common file extension suffixes
-    title = title.replaceAll(RegExp(r'\.(mp4|mkv|mov|webm|avi|ts|flv|3gp|wmv|m4v|pdf|epub|zip|rar|txt|doc|docx)$', caseSensitive: false), '');
+    title = title.replaceAll(
+        RegExp(
+            r'\.(mp4|mkv|mov|webm|avi|ts|flv|3gp|wmv|m4v|pdf|epub|zip|rar|txt|doc|docx)$',
+            caseSensitive: false),
+        '');
 
     // Remove channel @ handles and web URLs
-    title = title.replaceAll(RegExp(r'@[A-Za-z0-9_]+'), '').replaceAll(RegExp(r'https?:\/\/\S+'), '');
+    title = title
+        .replaceAll(RegExp(r'@[A-Za-z0-9_]+'), '')
+        .replaceAll(RegExp(r'https?:\/\/\S+'), '');
 
     // Remove resolution and codec tags like [1080p], (720p), [x264], etc.
-    title = title.replaceAll(RegExp(r'\[(?:\d{3,4}p|x264|x265|HEVC|WEBRip|HD)\]', caseSensitive: false), '');
-    title = title.replaceAll(RegExp(r'\((?:\d{3,4}p|x264|x265|HEVC|WEBRip|HD)\)', caseSensitive: false), '');
+    title = title.replaceAll(
+        RegExp(r'\[(?:\d{3,4}p|x264|x265|HEVC|WEBRip|HD)\]',
+            caseSensitive: false),
+        '');
+    title = title.replaceAll(
+        RegExp(r'\((?:\d{3,4}p|x264|x265|HEVC|WEBRip|HD)\)',
+            caseSensitive: false),
+        '');
 
     // Normalize underscores and multiple spaces
     title = title.replaceAll('_', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -643,27 +915,27 @@ class _ParsedMediaItem {
   });
 
   Map<String, dynamic> toMap() => {
-    'id': id,
-    'topicId': topicId,
-    'title': title,
-    'fileName': fileName,
-    'streamUrl': streamUrl,
-    'duration': duration,
-    'size': size,
-    'isVideo': isVideo,
-    'text': text,
-  };
+        'id': id,
+        'topicId': topicId,
+        'title': title,
+        'fileName': fileName,
+        'streamUrl': streamUrl,
+        'duration': duration,
+        'size': size,
+        'isVideo': isVideo,
+        'text': text,
+      };
 
-  factory _ParsedMediaItem.fromMap(Map<String, dynamic> map) => _ParsedMediaItem(
-    id: map['id'] as int,
-    topicId: map['topicId'] as int,
-    title: map['title'] as String,
-    fileName: map['fileName'] as String?,
-    streamUrl: map['streamUrl'] as String,
-    duration: map['duration'] as num,
-    size: map['size'] as int,
-    isVideo: map['isVideo'] as bool,
-    text: map['text'] as String,
-  );
+  factory _ParsedMediaItem.fromMap(Map<String, dynamic> map) =>
+      _ParsedMediaItem(
+        id: map['id'] as int,
+        topicId: map['topicId'] as int,
+        title: map['title'] as String,
+        fileName: map['fileName'] as String?,
+        streamUrl: map['streamUrl'] as String,
+        duration: map['duration'] as num,
+        size: map['size'] as int,
+        isVideo: map['isVideo'] as bool,
+        text: map['text'] as String,
+      );
 }
-

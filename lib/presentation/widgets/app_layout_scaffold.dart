@@ -33,17 +33,18 @@ class _AppLayoutScaffoldState extends State<AppLayoutScaffold> {
   int _lastSeenDownloadCount = 0;
   int _lastSeenBookmarkCount = 0;
 
-  final List<Widget> _pages = const [
-    DashboardScreen(),
-    AddCourseScreen(),
-    DownloadsScreen(),
-    BookmarksScreen(),
-  ];
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialTabIndex;
+    _pages = [
+      DashboardScreen(onImportCourse: () => _onTabSelected(1)),
+      const AddCourseScreen(),
+      const DownloadsScreen(),
+      const BookmarksScreen(),
+    ];
     _loadSeenBadgeState();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {

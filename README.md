@@ -44,13 +44,16 @@
 - **⚡ Zero-Copy Stream Engine**: Leverages `Uint8List.sublistView()` zero-copy slicing to pipe network buffers straight into ExoPlayer with **0 heap allocation churn**.
 - **⚡ Lookahead Pipeline & Flash Disk Virtual Cache**: Prefetches ahead directly into high-speed flash disk storage (`telelearn_segment_cache`), keeping RAM usage minimal while enabling instant 0ms backward seek and lecture resumption.
 - **⏯️ Instant Autoplay & Minimal Loader**: Tapping any lesson starts streaming immediately with visual buffering indicators and responsive HUD overlays.
+- **🛠️ Targeted File-Reference Recovery**: If a Telegram file reference expires, only the failed lesson is refreshed and playback retries. The containing module refresh starts after the recovered video renders, without blocking playback. Normal playback performs no refresh work.
 - **🛡️ 100% Zero-Audio-Leak Guarantee**: Synchronously pauses controllers and disconnects stream epochs on screen exit or genuine app minimization.
 - **🔄 Intelligent Submodule Back Navigation**: Exiting a video started from the Dashboard returns directly to that module's video list in `CourseExplorerScreen`.
 
 ### 📥 Resilient Background Download Manager
-- **🚀 High-Speed Direct Streams**: Downloads video lectures and course PDFs at full connection bandwidth directly from Telegram Cloud DCs.
+- **🚀 Adaptive Download Paths**: Normal HTTP media uses direct range requests and two parallel streams for large files. Telegram media uses the authenticated local proxy with larger download chunks and no playback pacing.
 - **🛡️ Uninterrupted Background Execution**: Active downloads run independently of the video player and continue smoothly while navigating or watching lectures.
 - **📍 Exact Byte-Offset Continuation**: Resumes paused or network-interrupted downloads precisely from the last received byte (`Range: bytes=OFFSET-`) without restarting from 0%.
+- **🧱 Safe Persistent Caching**: Telegram chunks are written atomically, so concurrent playback or download requests never consume partially written cache files.
+- **🔁 Targeted Download Recovery**: An expired Telegram reference refreshes only the failed lesson and retries once, with per-lesson cooldown and duplicate-request coalescing.
 - **📄 Offline PDF Notes Viewer**: Built-in PDF reader with offline caching and study document generation.
 
 ### 📊 Real-Time Daily Study Analytics & Auto-Updating Shelf
@@ -61,6 +64,7 @@
 ### 🔄 Clean Telegram Auth & Sequential Channel Importer
 - **⚡ Streamlined Phone & OTP Login**: Clean, clutter-free authentication flow with auto-recovery for session handshakes.
 - **⚡ Non-Blocking FIFO Task Queue**: Multi-channel course synchronizations are queued sequentially (`_syncQueueLock`), maintaining a smooth UI without memory or CPU spikes during imports.
+- **📚 Efficient Course Loading**: Concurrent startup requests share one SQLite load and JSON decode pass. Explicit full-course synchronization remains available, while submodule refresh uses one Telegram topic request.
 
 ### 🎨 Modern Aesthetic Design System
 - **🌙 Deep Midnight Dark Mode (`#0B1120`) & ☀️ Warm Light Mode (`#F8FAFC`)**.
@@ -78,7 +82,8 @@ graph TD
     
     subgraph Proxy ["In-App Localhost Proxy (127.0.0.1:8765)"]
         B -->|Local HTTP Range Stream| E["LocalStreamingServer"]
-        C -->|Persistent Download Stream| E
+        C -->|Telegram Download Stream| E
+        C -->|Direct HTTP Range Download| I["Parallel Range Downloader"]
         E -->|High-Speed Flash Cache| G["Local Disk Cache (telelearn_segment_cache)"]
     end
 
@@ -100,13 +105,13 @@ graph TD
 | :--- | :--- | :--- |
 | **Framework** | Flutter 3.24+ / Dart 3.5+ | Cross-platform high-performance compilation |
 | **Video Engine** | `video_player` (Media3 ExoPlayer) | Hardware direct-scanout video playback |
-| **MTProto Protocol** | Direct Socket TCP/TLS | Client-side Telegram authentication & file streaming |
+| **MTProto Protocol** | Direct Socket TCP/TLS | Client-side Telegram authentication & file access |
 | **Local Proxy Server** | `dart:io` `HttpServer` (`127.0.0.1:8765`) | In-app byte-range streaming & lookahead pipeline |
 | **State Management** | `provider` | Reactive, decoupled state synchronization |
 | **Local Database** | `sqflite` + `path_provider` | Persistent offline progress, bookmarks & downloads |
 | **App Updater** | `package_info_plus` + `open_filex` | GitHub Releases OTA checking, streaming APKs & native install |
 | **Typography** | `google_fonts` | Inter & Roboto Mono typeface rendering |
-| **Security** | `flutter_secure_storage` | Secure encrypted credential and session storage |
+| **Session Storage** | `shared_preferences` | Local login state and Telegram session metadata |
 
 ---
 
@@ -170,6 +175,29 @@ flutter analyze
 ---
 
 ## 📦 Building Production Release APKs
+
+The OTA updater requires every published APK to use the same release signing key.
+Android preserves SQLite and SharedPreferences during an in-place update only when
+the package name and signing identity stay the same. Do not publish an APK signed
+with the debug key.
+
+Create a keystore once and keep it backed up securely:
+
+```bash
+keytool -genkeypair -v -keystore telelearn-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias telelearn
+```
+
+Create `android/key.properties` locally (this file is ignored by Git):
+
+```properties
+storePassword=YOUR_STORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=telelearn
+storeFile=/absolute/path/to/telelearn-release.jks
+```
+
+Use the same keystore for every APK uploaded to the GitHub release. If the key is
+lost or changed, existing users must uninstall the app and will lose local data.
 
 To generate optimized, split-ABI production release APKs with maximum performance:
 

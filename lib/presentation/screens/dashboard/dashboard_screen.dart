@@ -19,7 +19,9 @@ import '../course/add_course_screen.dart';
 import '../player/youtube_video_player_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  final VoidCallback? onImportCourse;
+
+  const DashboardScreen({super.key, this.onImportCourse});
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -40,6 +42,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _openAddCourse() {
+    if (widget.onImportCourse != null) {
+      widget.onImportCourse!();
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AddCourseScreen()),
+    );
   }
 
   String _getGreeting() {
@@ -220,9 +233,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         const SizedBox(width: 8),
                         ElevatedButton.icon(
                           onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const AddCourseScreen()),
-                            );
+                            _openAddCourse();
                           },
                           icon: const Icon(Icons.add, size: 16),
                           label: Text(
@@ -583,9 +594,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
                     onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const AddCourseScreen()),
-                      );
+                      _openAddCourse();
                     },
                     icon: const Icon(Icons.add, size: 16),
                     label: const Text('Import Course'),

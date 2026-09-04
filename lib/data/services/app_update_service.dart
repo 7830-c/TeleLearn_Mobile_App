@@ -36,42 +36,96 @@ class AppUpdateInfo {
 class AppUpdateService {
   static const String _githubRepo = '7830-c/TeleLearn_Mobile_App';
   static const String _prefLastCheckKey = 'ota_last_update_check_epoch';
-  static const int _checkIntervalHours = 24;
+  static Future<String>? _currentVersionFuture;
+  static Future<void>? _checkInFlight;
 
   /// Check for updates.
   /// - If [manual] is false: runs silently and only once every 24 hours.
   /// - If [manual] is true: checks immediately and notifies the user even if up to date.
-  static Future<void> checkForUpdate(BuildContext context, {bool manual = false}) async {
+  static Future<void> checkForUpdate(BuildContext context,
+      {bool manual = false}) async {
+    if (_checkInFlight != null) {
+      if (manual && context.mounted) {
+        ToastUtils.showSnackBar(context, 'Update check already in progress');
+      }
+      return;
+    }
+
+    if (manual && context.mounted) {
+      ToastUtils.showSnackBar(
+        context,
+        'Checking for updates...',
+        duration: const Duration(seconds: 2),
+      );
+    }
+
+    final check = _checkForUpdate(context, manual: manual);
+    _checkInFlight = check;
+    try {
+      await check;
+    } finally {
+      if (identical(_checkInFlight, check)) {
+        _checkInFlight = null;
+      }
+    }
+  }
+
+  static Future<void> _checkForUpdate(BuildContext context,
+      {required bool manual}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final nowEpoch = DateTime.now().millisecondsSinceEpoch;
 
       if (!manual) {
         final lastCheckEpoch = prefs.getInt(_prefLastCheckKey) ?? 0;
-        final differenceHours = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(lastCheckEpoch)).inHours;
-        if (differenceHours < _checkIntervalHours) {
+        final now = DateTime.now();
+        final lastCheck = DateTime.fromMillisecondsSinceEpoch(lastCheckEpoch);
+        final checkedToday = lastCheckEpoch > 0 &&
+            lastCheck.year == now.year &&
+            lastCheck.month == now.month &&
+            lastCheck.day == now.day;
+        if (checkedToday) {
           // Already checked recently; keep the app lightweight and silent
           return;
         }
       }
 
       final info = await _fetchUpdateInfo();
-      // Record successful check time
-      await prefs.setInt(_prefLastCheckKey, nowEpoch);
+      if (info == null) return;
+
+      // Failed checks remain eligible for a retry instead of being cached.
+      await prefs.setInt(
+          _prefLastCheckKey, DateTime.now().millisecondsSinceEpoch);
 
       if (!context.mounted) return;
 
-      if (info != null && info.hasUpdate && info.apkDownloadUrl.isNotEmpty) {
+      if (info.hasUpdate) {
+        if (info.apkDownloadUrl.isEmpty) {
+          if (manual) {
+            ToastUtils.showSnackBar(
+              context,
+              'Update v${info.latestVersion} is available, but no APK was found.',
+              isError: true,
+            );
+          }
+          return;
+        }
+
+        if (manual) {
+          ToastUtils.showSnackBar(
+            context,
+            'Update available: v${info.latestVersion}',
+            isSuccess: true,
+          );
+        }
         showDialog(
           context: context,
           barrierDismissible: true,
           builder: (dialogCtx) => AppUpdateDialog(updateInfo: info),
         );
       } else if (manual) {
-        final currentVer = info?.currentVersion ?? '1.0.0';
         ToastUtils.showSnackBar(
           context,
-          'TeleLearn is up to date (v$currentVer)',
+          'TeleLearn is up to date (v${info.currentVersion})',
           isSuccess: true,
         );
       }
@@ -90,10 +144,12 @@ class AppUpdateService {
   /// Query the GitHub Releases public API for the latest release
   static Future<AppUpdateInfo?> _fetchUpdateInfo() async {
     try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      final currentVersion = packageInfo.version; // e.g. "1.0.0"
+      _currentVersionFuture ??=
+          PackageInfo.fromPlatform().then((info) => info.version);
+      final currentVersion = await _currentVersionFuture!;
 
-      final url = Uri.parse('https://api.github.com/repos/$_githubRepo/releases/latest');
+      final url = Uri.parse(
+          'https://api.github.com/repos/$_githubRepo/releases/latest');
       final response = await http.get(
         url,
         headers: {
@@ -103,13 +159,15 @@ class AppUpdateService {
       ).timeout(const Duration(seconds: 8));
 
       if (response.statusCode != 200) {
-        debugPrint('[AppUpdateService] GitHub releases API returned status ${response.statusCode}');
+        debugPrint(
+            '[AppUpdateService] GitHub releases API returned status ${response.statusCode}');
         return null;
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final tagName = (data['tag_name'] as String?)?.trim() ?? '';
-      final body = (data['body'] as String?)?.trim() ?? 'Bug fixes and performance improvements.';
+      final body = (data['body'] as String?)?.trim() ??
+          'Bug fixes and performance improvements.';
 
       final latestVersion = tagName.replaceFirst(RegExp(r'^[vV]'), '').trim();
       final hasUpdate = _isVersionGreater(latestVersion, currentVersion);
@@ -155,8 +213,14 @@ class AppUpdateService {
   /// Compares semantic versions (e.g., "1.1.0" > "1.0.0")
   static bool _isVersionGreater(String remote, String local) {
     try {
-      final remoteParts = remote.split('.').map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0).toList();
-      final localParts = local.split('.').map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0).toList();
+      final remoteParts = remote
+          .split('.')
+          .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+          .toList();
+      final localParts = local
+          .split('.')
+          .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+          .toList();
 
       while (remoteParts.length < 3) {
         remoteParts.add(0);
@@ -178,16 +242,21 @@ class AppUpdateService {
   /// Download the APK from GitHub and immediately trigger Android's native installer
   static Future<bool> downloadAndInstallApk({
     required String downloadUrl,
-    required void Function(double progress, int downloadedBytes, int totalBytes) onProgress,
+    required void Function(double progress, int downloadedBytes, int totalBytes)
+        onProgress,
   }) async {
     http.Client? client;
+    IOSink? sink;
+    File? file;
     try {
       client = http.Client();
       final request = http.Request('GET', Uri.parse(downloadUrl));
-      final response = await client.send(request);
+      final response =
+          await client.send(request).timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) {
-        debugPrint('[AppUpdateService] Download failed with status ${response.statusCode}');
+        debugPrint(
+            '[AppUpdateService] Download failed with status ${response.statusCode}');
         return false;
       }
 
@@ -196,7 +265,7 @@ class AppUpdateService {
 
       final tempDir = await getTemporaryDirectory();
       final filePath = p.join(tempDir.path, 'telelearn_update.apk');
-      final file = File(filePath);
+      file = File(filePath);
 
       if (file.existsSync()) {
         try {
@@ -204,20 +273,29 @@ class AppUpdateService {
         } catch (_) {}
       }
 
-      final sink = file.openWrite();
+      sink = file.openWrite();
+      final progressClock = Stopwatch()..start();
+      onProgress(0.0, 0, totalBytes);
 
-      await response.stream.listen(
-        (chunk) {
-          downloadedBytes += chunk.length;
-          sink.add(chunk);
-          final progress = totalBytes > 0 ? (downloadedBytes / totalBytes) : 0.0;
+      await for (final chunk
+          in response.stream.timeout(const Duration(seconds: 10))) {
+        downloadedBytes += chunk.length;
+        sink.add(chunk);
+        if (progressClock.elapsed >= const Duration(milliseconds: 100) ||
+            (totalBytes > 0 && downloadedBytes >= totalBytes)) {
+          progressClock.reset();
+          final progress = totalBytes > 0
+              ? (downloadedBytes / totalBytes).clamp(0.0, 1.0)
+              : 0.0;
           onProgress(progress, downloadedBytes, totalBytes);
-        },
-        cancelOnError: true,
-      ).asFuture();
+        }
+      }
 
       await sink.flush();
       await sink.close();
+      sink = null;
+      if (totalBytes > 0 && downloadedBytes < totalBytes) return false;
+      onProgress(1.0, downloadedBytes, totalBytes);
 
       // Launch native Android package installer
       final result = await OpenFilex.open(
@@ -225,10 +303,15 @@ class AppUpdateService {
         type: 'application/vnd.android.package-archive',
       );
 
-      debugPrint('[AppUpdateService] OpenFilex result: ${result.type} - ${result.message}');
+      debugPrint(
+          '[AppUpdateService] OpenFilex result: ${result.type} - ${result.message}');
       return result.type == ResultType.done;
     } catch (e) {
       debugPrint('[AppUpdateService] Error downloading/installing APK: $e');
+      await sink?.close();
+      try {
+        if (file != null && file.existsSync()) await file.delete();
+      } catch (_) {}
       return false;
     } finally {
       client?.close();

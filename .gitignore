@@ -35,6 +35,7 @@ migrate_working_dir/
 # Android build artifacts
 .gradle/
 local.properties
+android/key.properties
 /android/.gradle/
 /android/app/debug/
 /android/app/profile/

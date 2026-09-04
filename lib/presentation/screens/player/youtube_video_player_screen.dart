@@ -34,7 +34,8 @@ class YouTubeVideoPlayerScreen extends StatefulWidget {
   });
 
   @override
-  State<YouTubeVideoPlayerScreen> createState() => _YouTubeVideoPlayerScreenState();
+  State<YouTubeVideoPlayerScreen> createState() =>
+      _YouTubeVideoPlayerScreenState();
 }
 
 class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
@@ -50,9 +51,12 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   // Independent Lag-Free ValueNotifiers (Zero-Rebuild UI Architecture)
   final ValueNotifier<bool> _showControlsNotifier = ValueNotifier<bool>(true);
   final ValueNotifier<bool> _bufferingNotifier = ValueNotifier<bool>(false);
-  final ValueNotifier<double> _dragPositionNotifier = ValueNotifier<double>(-1.0); // <0 = not dragging
-  final ValueNotifier<bool> _leftSeekRippleNotifier = ValueNotifier<bool>(false);
-  final ValueNotifier<bool> _rightSeekRippleNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<double> _dragPositionNotifier =
+      ValueNotifier<double>(-1.0); // <0 = not dragging
+  final ValueNotifier<bool> _leftSeekRippleNotifier =
+      ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _rightSeekRippleNotifier =
+      ValueNotifier<bool>(false);
   final ValueNotifier<bool> _speedBoostNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _isPlayingNotifier = ValueNotifier<bool>(false);
 
@@ -72,6 +76,7 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   double _playbackSpeed = 1.0;
   Timer? _hudDismissTimer;
   bool _isSeeking = false;
+  bool _hasRefreshedCourseForCurrentLesson = false;
 
   // Pinch-to-Zoom Controller
   final TransformationController _zoomController = TransformationController();
@@ -81,7 +86,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   bool _isScreenLocked = false;
   bool _isFullscreen = false;
   final bool _isLooping = false;
-  int _playerInitSession = 0; // Generation token for instant switching cancellation
+  int _playerInitSession =
+      0; // Generation token for instant switching cancellation
 
   // Content Tabs
   int _activeDrawerTab = 0; // 0 = Course Playlist, 1 = Lesson Notes
@@ -123,7 +129,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       if (course != null) {
         for (final m in course.modules) {
           for (final l in m.lessons) {
-            if (l.id == _currentLessonId && l.thumbnailUrl != null && l.thumbnailUrl!.isNotEmpty) {
+            if (l.id == _currentLessonId &&
+                l.thumbnailUrl != null &&
+                l.thumbnailUrl!.isNotEmpty) {
               precacheImage(NetworkImage(l.thumbnailUrl!), context);
               return;
             }
@@ -154,7 +162,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     } else if (state == AppLifecycleState.resumed) {
       _isAppBackgrounded = false;
       _backgroundPauseTimer?.cancel();
-      if (_wasPlayingBeforeBackground && _controller != null && _controller!.value.isInitialized) {
+      if (_wasPlayingBeforeBackground &&
+          _controller != null &&
+          _controller!.value.isInitialized) {
         _controller?.play();
       }
     }
@@ -199,7 +209,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
   void _resetControlsTimer() {
     _controlsTimer?.cancel();
-    if (!_isScreenLocked && (_controller?.value.isPlaying ?? false) && !_isDraggingScrubber) {
+    if (!_isScreenLocked &&
+        (_controller?.value.isPlaying ?? false) &&
+        !_isDraggingScrubber) {
       _controlsTimer = Timer(const Duration(seconds: 4), () {
         if (mounted && !_isDraggingScrubber) {
           _showControlsNotifier.value = false;
@@ -252,24 +264,31 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
     String rawVideoUrl = lesson?.videoUrl ??
         'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-    if (rawVideoUrl.contains('/courses/stream/') && !rawVideoUrl.contains('quality=')) {
-      rawVideoUrl += rawVideoUrl.contains('?') ? '&quality=high' : '?quality=high';
+    if (rawVideoUrl.contains('/courses/stream/') &&
+        !rawVideoUrl.contains('quality=')) {
+      rawVideoUrl +=
+          rawVideoUrl.contains('?') ? '&quality=high' : '?quality=high';
     }
 
-    final downloadRecord = downloadProvider.getDownloadRecord(_currentCourseId, _currentLessonId, 'video');
+    final downloadRecord = downloadProvider.getDownloadRecord(
+        _currentCourseId, _currentLessonId, 'video');
 
     VideoPlayerController? newController;
     try {
-      final cachedProgress = progressProvider.getCachedCourseProgress(_currentCourseId);
+      final cachedProgress =
+          progressProvider.getCachedCourseProgress(_currentCourseId);
       if (cachedProgress.isEmpty) {
-        await progressProvider.loadCourseProgress(_currentCourseId, userPhone: authProvider.phoneNumber);
+        await progressProvider.loadCourseProgress(_currentCourseId,
+            userPhone: authProvider.phoneNumber);
       } else {
-        unawaited(progressProvider.loadCourseProgress(_currentCourseId, userPhone: authProvider.phoneNumber));
+        unawaited(progressProvider.loadCourseProgress(_currentCourseId,
+            userPhone: authProvider.phoneNumber));
       }
 
       if (sessionId != _playerInitSession || !mounted) return;
 
-      if (downloadRecord != null && File(downloadRecord.localPath).existsSync()) {
+      if (downloadRecord != null &&
+          File(downloadRecord.localPath).existsSync()) {
         newController = VideoPlayerController.file(
           File(downloadRecord.localPath),
           videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
@@ -284,7 +303,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
           Uri.parse(streamUrl),
           videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
           httpHeaders: const {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
+            'User-Agent':
+                'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
             'Accept': '*/*',
             'Accept-Encoding': 'identity',
             'Connection': 'keep-alive',
@@ -309,7 +329,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
         _currentLessonId,
       );
 
-      if (savedSec > 2 && savedSec < (newController.value.duration.inSeconds - 3)) {
+      if (savedSec > 2 &&
+          savedSec < (newController.value.duration.inSeconds - 3)) {
         await newController.seekTo(Duration(seconds: savedSec));
       }
 
@@ -320,7 +341,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
         return;
       }
 
-      final bool shouldPlay = !_isAppBackgrounded && (autoPlay || widget.autoPlay || _isUserInitiatedSwitch);
+      final bool shouldPlay = !_isAppBackgrounded &&
+          (autoPlay || widget.autoPlay || _isUserInitiatedSwitch);
       await Future.wait([
         newController.setPlaybackSpeed(_playbackSpeed),
         newController.setLooping(_isLooping),
@@ -360,6 +382,62 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
         if (_controller == newController) _controller = null;
       }
       debugPrint('[YouTubePlayer] Initialization error: $e');
+      final course = courseProvider.getCourse(_currentCourseId);
+      final lesson = course?.modules
+          .expand((module) => module.lessons)
+          .where((item) => item.id == _currentLessonId)
+          .firstOrNull;
+      if (lesson?.videoUrl?.contains('/tg_stream') == true &&
+          !_hasRefreshedCourseForCurrentLesson &&
+          sessionId == _playerInitSession &&
+          mounted) {
+        _hasRefreshedCourseForCurrentLesson = true;
+        try {
+          await courseProvider.refreshCourseForMediaFailure(
+            _currentCourseId,
+            _currentLessonId,
+            phone: authProvider.phoneNumber,
+          );
+          if (sessionId == _playerInitSession && mounted) {
+            await _initializePlayer(autoPlay: autoPlay);
+            if (sessionId == _playerInitSession &&
+                mounted &&
+                _errorMessage == null &&
+                _controller?.value.isInitialized == true) {
+              final refreshedCourse =
+                  courseProvider.getCourse(_currentCourseId);
+              final moduleId = refreshedCourse?.modules
+                  .where((module) => module.lessons
+                      .any((lesson) => lesson.id == _currentLessonId))
+                  .firstOrNull
+                  ?.id;
+              if (moduleId != null && moduleId > 0) {
+                // Let the first recovered frame render before starting the
+                // asynchronous module refresh.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted || sessionId != _playerInitSession) return;
+                  unawaited(() async {
+                    try {
+                      await courseProvider.refreshModule(
+                        _currentCourseId,
+                        moduleId,
+                        phone: authProvider.phoneNumber,
+                      );
+                    } catch (backgroundError) {
+                      debugPrint(
+                          '[YouTubePlayer] Background module refresh failed: $backgroundError');
+                    }
+                  }());
+                });
+              }
+            }
+            return;
+          }
+        } catch (refreshError) {
+          debugPrint(
+              '[YouTubePlayer] Course refresh after playback failure failed: $refreshError');
+        }
+      }
       if (sessionId == _playerInitSession && mounted) {
         setState(() {
           _isBuffering = false;
@@ -389,11 +467,14 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     }
 
     // Auto-save and mark completed ONCE if reached 90%
-    if (!_hasMarkedCompleted && val.position.inSeconds > 0 && val.duration.inSeconds > 0) {
+    if (!_hasMarkedCompleted &&
+        val.position.inSeconds > 0 &&
+        val.duration.inSeconds > 0) {
       if (val.position.inSeconds >= (val.duration.inSeconds * 0.90)) {
         _hasMarkedCompleted = true;
         final progressProvider = context.read<ProgressProvider>();
-        if (!progressProvider.isLessonCompleted(_currentCourseId, _currentLessonId)) {
+        if (!progressProvider.isLessonCompleted(
+            _currentCourseId, _currentLessonId)) {
           progressProvider.saveProgress(
             courseId: _currentCourseId,
             lessonId: _currentLessonId,
@@ -428,13 +509,13 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
       _lastRecordedPositionSec = pos;
       final authPhone = context.read<AuthProvider>().phoneNumber;
       context.read<ProgressProvider>().saveProgressQuiet(
-        courseId: _currentCourseId,
-        lessonId: _currentLessonId,
-        progressSeconds: pos,
-        durationSeconds: dur,
-        deltaSeconds: delta,
-        userPhone: authPhone,
-      );
+            courseId: _currentCourseId,
+            lessonId: _currentLessonId,
+            progressSeconds: pos,
+            durationSeconds: dur,
+            deltaSeconds: delta,
+            userPhone: authPhone,
+          );
     }
   }
 
@@ -456,11 +537,15 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   }
 
   void _onDoubleTapLeft() {
-    if (_isScreenLocked || _controller == null || !_controller!.value.isInitialized) return;
+    if (_isScreenLocked ||
+        _controller == null ||
+        !_controller!.value.isInitialized) return;
     _isSeeking = true;
     _bufferingNotifier.value = true;
     final newPos = _controller!.value.position - const Duration(seconds: 10);
-    _controller!.seekTo(newPos < Duration.zero ? Duration.zero : newPos).then((_) {
+    _controller!
+        .seekTo(newPos < Duration.zero ? Duration.zero : newPos)
+        .then((_) {
       if (mounted) {
         _controller?.play();
         _isSeeking = false;
@@ -470,7 +555,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
   }
 
   void _onDoubleTapRight() {
-    if (_isScreenLocked || _controller == null || !_controller!.value.isInitialized) return;
+    if (_isScreenLocked ||
+        _controller == null ||
+        !_controller!.value.isInitialized) return;
     _isSeeking = true;
     _bufferingNotifier.value = true;
     final maxDur = _controller!.value.duration;
@@ -520,7 +607,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     final wasPlaying = _controller?.value.isPlaying ?? false;
     _isLandscapeLeft = !_isLandscapeLeft;
     SystemChrome.setPreferredOrientations([
-      _isLandscapeLeft ? DeviceOrientation.landscapeLeft : DeviceOrientation.landscapeRight,
+      _isLandscapeLeft
+          ? DeviceOrientation.landscapeLeft
+          : DeviceOrientation.landscapeRight,
     ]);
     if (wasPlaying) {
       _controller?.play();
@@ -537,7 +626,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
     if (_isFullscreen) {
       SystemChrome.setPreferredOrientations([
-        _isLandscapeLeft ? DeviceOrientation.landscapeLeft : DeviceOrientation.landscapeRight,
+        _isLandscapeLeft
+            ? DeviceOrientation.landscapeLeft
+            : DeviceOrientation.landscapeRight,
       ]);
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
@@ -552,14 +643,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     if (isInitialized && (wasPlaying || !_isInitialStandby)) {
       _controller?.play();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _controller != null && _controller!.value.isInitialized && !_isAppBackgrounded) {
+        if (mounted &&
+            _controller != null &&
+            _controller!.value.isInitialized &&
+            !_isAppBackgrounded) {
           if (!_controller!.value.isPlaying) {
             _controller!.play();
           }
         }
       });
       Future.delayed(const Duration(milliseconds: 250), () {
-        if (mounted && _controller != null && _controller!.value.isInitialized && !_isAppBackgrounded) {
+        if (mounted &&
+            _controller != null &&
+            _controller!.value.isInitialized &&
+            !_isAppBackgrounded) {
           if (!_controller!.value.isPlaying) {
             _controller!.play();
           }
@@ -575,7 +672,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
   void _showSpeedSelectionModal() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    const allSpeeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
+    const allSpeeds = [
+      0.25,
+      0.5,
+      0.75,
+      1.0,
+      1.25,
+      1.5,
+      1.75,
+      2.0,
+      2.25,
+      2.5,
+      2.75,
+      3.0
+    ];
 
     showModalBottomSheet(
       context: context,
@@ -616,7 +726,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
                         color: AppColors.primary.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
@@ -624,7 +735,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.bolt_rounded, size: 14, color: AppColors.primary),
+                          const Icon(Icons.bolt_rounded,
+                              size: 14, color: AppColors.primary),
                           const SizedBox(width: 3),
                           Text(
                             '${_playbackSpeed == 1.0 ? '1' : _playbackSpeed}x Active',
@@ -662,17 +774,25 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         },
                         selectedColor: AppColors.primary,
                         labelStyle: TextStyle(
-                          color: isSel ? Colors.white : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                          color: isSel
+                              ? Colors.white
+                              : (isDark
+                                  ? const Color(0xFF94A3B8)
+                                  : const Color(0xFF64748B)),
                           fontWeight: isSel ? FontWeight.w800 : FontWeight.w600,
                           fontSize: 12,
                         ),
-                        backgroundColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                        backgroundColor: isDark
+                            ? const Color(0xFF1E293B)
+                            : const Color(0xFFF1F5F9),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                           side: BorderSide(
                             color: isSel
                                 ? AppColors.primary
-                                : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                : (isDark
+                                    ? const Color(0xFF334155)
+                                    : const Color(0xFFE2E8F0)),
                           ),
                         ),
                       ),
@@ -735,6 +855,7 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     _progressSaveTimer?.cancel();
     setState(() {
       _currentLessonId = newLessonId;
+      _hasRefreshedCourseForCurrentLesson = false;
       _lastRecordedPositionSec = 0;
       _isUserInitiatedSwitch = true;
       _isInitialStandby = false;
@@ -748,12 +869,14 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     final isDl = downloadProvider.isDownloaded(course.id, note.id, 'note');
 
     if (isDl) {
-      final rec = downloadProvider.getDownloadRecord(course.id, note.id, 'note');
+      final rec =
+          downloadProvider.getDownloadRecord(course.id, note.id, 'note');
       if (rec != null) {
         final file = File(rec.localPath);
         if (file.existsSync()) {
           try {
-            final res = await OpenFilex.open(rec.localPath, type: 'application/pdf');
+            final res =
+                await OpenFilex.open(rec.localPath, type: 'application/pdf');
             if (res.type == ResultType.done) return;
           } catch (_) {}
         }
@@ -817,7 +940,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
 
     // Calculate Aspect Ratio Widget with Pinch-to-Zoom
     Widget videoWidget;
-    final bool isReady = _controller != null && _controller!.value.isInitialized;
+    final bool isReady =
+        _controller != null && _controller!.value.isInitialized;
 
     if (isReady) {
       videoWidget = Stack(
@@ -841,9 +965,11 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: Colors.black.withValues(alpha: 0.55),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.3)),
                 ),
-                child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 36),
+                child: const Icon(Icons.play_arrow_rounded,
+                    color: Colors.white, size: 36),
               ),
             ),
         ],
@@ -860,11 +986,13 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                 ? Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 36),
+                      const Icon(Icons.error_outline_rounded,
+                          color: Colors.redAccent, size: 36),
                       const SizedBox(height: 8),
                       Text(
                         _errorMessage!,
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12),
                       ),
                       const SizedBox(height: 10),
                       ElevatedButton(
@@ -888,7 +1016,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                               color: AppColors.primary.withValues(alpha: 0.92),
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppColors.primary.withValues(alpha: 0.5),
+                                  color:
+                                      AppColors.primary.withValues(alpha: 0.5),
                                   blurRadius: 20,
                                   spreadRadius: 3,
                                 ),
@@ -916,7 +1045,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: Colors.black.withValues(alpha: 0.65),
-                              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.25)),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.4),
@@ -932,7 +1062,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                   height: 44,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 3,
-                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2563EB)),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        Color(0xFF2563EB)),
                                   ),
                                 ),
                                 Icon(
@@ -951,7 +1082,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
     }
 
     final isFullscreen = _isFullscreen;
-    final totalDurationMs = (_controller?.value.duration.inMilliseconds.toDouble() ?? 1.0);
+    final totalDurationMs =
+        (_controller?.value.duration.inMilliseconds.toDouble() ?? 1.0);
 
     // Sub-Module Progress calculations
     final moduleLessons = currentModule?.lessons ?? [];
@@ -980,9 +1112,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                     ? EdgeInsets.zero
                     : const EdgeInsets.fromLTRB(10, 4, 10, 8),
                 child: Container(
-                  height: isFullscreen
-                      ? MediaQuery.of(context).size.height
-                      : 230,
+                  height:
+                      isFullscreen ? MediaQuery.of(context).size.height : 230,
                   width: double.infinity,
                   decoration: BoxDecoration(
                     color: Colors.black,
@@ -993,7 +1124,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                             BoxShadow(
                               color: isDark
                                   ? Colors.black.withValues(alpha: 0.5)
-                                  : const Color(0xFF0F172A).withValues(alpha: 0.18),
+                                  : const Color(0xFF0F172A)
+                                      .withValues(alpha: 0.18),
                               blurRadius: 14,
                               offset: const Offset(0, 6),
                             ),
@@ -1007,7 +1139,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         _startPlaybackFromStandby();
                         return;
                       }
-                      _showControlsNotifier.value = !_showControlsNotifier.value;
+                      _showControlsNotifier.value =
+                          !_showControlsNotifier.value;
                       if (_showControlsNotifier.value && !_isScreenLocked) {
                         _resetControlsTimer();
                       }
@@ -1045,18 +1178,26 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                 setState(() => _isZoomed = false);
                               },
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 5),
                                 decoration: BoxDecoration(
                                   color: Colors.black.withValues(alpha: 0.75),
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                                  border: Border.all(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.25)),
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.zoom_out_map_rounded, color: Colors.white, size: 14),
+                                    Icon(Icons.zoom_out_map_rounded,
+                                        color: Colors.white, size: 14),
                                     SizedBox(width: 4),
-                                    Text('Reset Zoom', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+                                    Text('Reset Zoom',
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700)),
                                   ],
                                 ),
                               ),
@@ -1076,15 +1217,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: Colors.white.withValues(alpha: 0.15),
-                                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(120)),
+                                  borderRadius: const BorderRadius.horizontal(
+                                      right: Radius.circular(120)),
                                 ),
                                 child: const Center(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.fast_rewind_rounded, color: Colors.white, size: 36),
+                                      Icon(Icons.fast_rewind_rounded,
+                                          color: Colors.white, size: 36),
                                       SizedBox(height: 4),
-                                      Text('-10s', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                      Text('-10s',
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w700)),
                                     ],
                                   ),
                                 ),
@@ -1097,7 +1243,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         ValueListenableBuilder<bool>(
                           valueListenable: _rightSeekRippleNotifier,
                           builder: (context, showRightRipple, _) {
-                            if (!showRightRipple) return const SizedBox.shrink();
+                            if (!showRightRipple)
+                              return const SizedBox.shrink();
                             return Positioned(
                               right: 0,
                               top: 0,
@@ -1106,15 +1253,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: Colors.white.withValues(alpha: 0.15),
-                                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(120)),
+                                  borderRadius: const BorderRadius.horizontal(
+                                      left: Radius.circular(120)),
                                 ),
                                 child: const Center(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.fast_forward_rounded, color: Colors.white, size: 36),
+                                      Icon(Icons.fast_forward_rounded,
+                                          color: Colors.white, size: 36),
                                       SizedBox(height: 4),
-                                      Text('+10s', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                      Text('+10s',
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w700)),
                                     ],
                                   ),
                                 ),
@@ -1131,16 +1283,20 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                             return Positioned(
                               top: 16,
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 6),
                                 decoration: BoxDecoration(
                                   color: Colors.black.withValues(alpha: 0.8),
                                   borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                                  border: Border.all(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.3)),
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.bolt_rounded, color: Color(0xFFFBBF24), size: 16),
+                                    Icon(Icons.bolt_rounded,
+                                        color: Color(0xFFFBBF24), size: 16),
                                     SizedBox(width: 4),
                                     Text(
                                       '2X SPEED',
@@ -1161,7 +1317,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         ValueListenableBuilder<bool>(
                           valueListenable: _bufferingNotifier,
                           builder: (context, isBuffering, _) {
-                            if (!isBuffering || !(_controller?.value.isInitialized ?? false)) {
+                            if (!isBuffering ||
+                                !(_controller?.value.isInitialized ?? false)) {
                               return const SizedBox.shrink();
                             }
                             return Container(
@@ -1174,7 +1331,8 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                               padding: const EdgeInsets.all(8),
                               child: const CircularProgressIndicator(
                                 strokeWidth: 3,
-                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2563EB)),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF2563EB)),
                               ),
                             );
                           },
@@ -1184,7 +1342,9 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                         ValueListenableBuilder<bool>(
                           valueListenable: _showControlsNotifier,
                           builder: (context, showControls, _) {
-                            final bool isVisible = showControls && ((_controller?.value.isInitialized ?? false) || _isInitialStandby);
+                            final bool isVisible = showControls &&
+                                ((_controller?.value.isInitialized ?? false) ||
+                                    _isInitialStandby);
                             return AnimatedOpacity(
                               opacity: isVisible ? 1.0 : 0.0,
                               duration: const Duration(milliseconds: 200),
@@ -1194,329 +1354,539 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
-                                // Dark gradient background layer (tap to dismiss controls instantly)
-                                GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: () {
-                                    _showControlsNotifier.value = false;
-                                  },
-                                  child: Container(
-                                    decoration: const BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [Colors.black87, Colors.transparent, Colors.black87],
-                                        begin: Alignment.topCenter,
-                                        end: Alignment.bottomCenter,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-
-                          // Top Bar
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: SafeArea(
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                child: Row(
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 28),
-                                      onPressed: () {
-                                        if (isFullscreen) {
-                                          _toggleFullscreen();
-                                        } else {
-                                          _exitPlayerScreen(currentModule);
-                                        }
+                                    // Dark gradient background layer (tap to dismiss controls instantly)
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () {
+                                        _showControlsNotifier.value = false;
                                       },
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(
-                                        currentLesson?.title ?? 'Video Player',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: GoogleFonts.inter(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 13,
+                                      child: Container(
+                                        decoration: const BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              Colors.black87,
+                                              Colors.transparent,
+                                              Colors.black87
+                                            ],
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                    if (isFullscreen)
-                                      IconButton(
-                                        icon: const Icon(Icons.screen_rotation_rounded, color: Colors.white, size: 20),
-                                        tooltip: 'Flip Landscape Direction',
-                                        onPressed: _flipLandscapeOrientation,
-                                      ),
-                                    IconButton(
-                                      icon: Icon(
-                                        _isScreenLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
-                                        color: _isScreenLocked ? AppColors.accentAmber : Colors.white,
-                                        size: 20,
-                                      ),
-                                      onPressed: () {
-                                        setState(() => _isScreenLocked = !_isScreenLocked);
-                                        _resetControlsTimer();
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
 
-                          // Center Quick Controls (Replay 10, Glowing Blue Play/Pause, Forward 10)
-                          if (!_isScreenLocked && !_isInitialStandby)
-                            Center(
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  // Replay 10s Button
-                                  Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withValues(alpha: 0.45),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-                                    ),
-                                    child: IconButton(
-                                      padding: EdgeInsets.zero,
-                                      icon: const Icon(Icons.replay_10_rounded, color: Colors.white, size: 24),
-                                      onPressed: _onDoubleTapLeft,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 24),
-
-                                  // Glowing Large Play / Pause
-                                  Container(
-                                    width: 64,
-                                    height: 64,
-                                    decoration: BoxDecoration(
-                                      gradient: const LinearGradient(
-                                        colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                      ),
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: const Color(0xFF2563EB).withValues(alpha: 0.5),
-                                          blurRadius: 22,
-                                          spreadRadius: 2,
-                                        ),
-                                      ],
-                                    ),
-                                    child: ValueListenableBuilder<bool>(
-                                       valueListenable: _isPlayingNotifier,
-                                       builder: (context, isPlaying, _) {
-                                         return ValueListenableBuilder<bool>(
-                                           valueListenable: _bufferingNotifier,
-                                           builder: (context, isBuffering, _) {
-                                             final bool showSpin = isBuffering || _isSeeking;
-                                             return IconButton(
-                                               padding: EdgeInsets.zero,
-                                               icon: showSpin
-                                                   ? const SizedBox(
-                                                       width: 28,
-                                                       height: 28,
-                                                       child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white),
-                                                     )
-                                                   : Icon(
-                                                       isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                                       color: Colors.white,
-                                                       size: 38,
-                                                     ),
-                                               onPressed: showSpin ? null : _togglePlayPause,
-                                             );
-                                           },
-                                         );
-                                       },
-                                     ),
-                                  ),
-                                  const SizedBox(width: 24),
-
-                                  // Forward 10s Button
-                                  Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withValues(alpha: 0.45),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-                                    ),
-                                    child: IconButton(
-                                      padding: EdgeInsets.zero,
-                                      icon: const Icon(Icons.forward_10_rounded, color: Colors.white, size: 24),
-                                      onPressed: _onDoubleTapRight,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          // Bottom Scrubber Bar & Controls Row
-                          if (!_isScreenLocked && !_isInitialStandby && _controller != null)
-                            Positioned(
-                              bottom: 0,
-                              left: 0,
-                              right: 0,
-                              child: ValueListenableBuilder<VideoPlayerValue>(
-                                valueListenable: _controller!,
-                                builder: (context, playerVal, _) {
-                                  return ValueListenableBuilder<double>(
-                                    valueListenable: _dragPositionNotifier,
-                                    builder: (context, dragPos, _) {
-                                      final bool isDragging = dragPos >= 0;
-                                      final double livePosMs = isDragging
-                                          ? dragPos
-                                          : playerVal.position.inMilliseconds.toDouble();
-                                      final double liveDurMs = playerVal.duration.inMilliseconds.toDouble();
-                                      final double validMax = liveDurMs > 0 ? liveDurMs : 1.0;
-                                      final double liveSliderVal = livePosMs.clamp(0.0, validMax);
-
-                                      return Container(
-                                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            // Drag Position Floating Indicator
-                                            if (isDragging)
-                                              Container(
-                                                margin: const EdgeInsets.only(bottom: 4),
-                                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.black.withValues(alpha: 0.85),
-                                                  borderRadius: BorderRadius.circular(12),
-                                                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.6)),
-                                                ),
-                                                child: Text(
-                                                  '${DurationFormatter.formatTimestamp((dragPos / 1000).toInt())}  /  ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
-                                                  style: GoogleFonts.robotoMono(
+                                    // Top Bar
+                                    Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      child: SafeArea(
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 4),
+                                          child: Row(
+                                            children: [
+                                              IconButton(
+                                                icon: const Icon(
+                                                    Icons.keyboard_arrow_down,
                                                     color: Colors.white,
-                                                    fontSize: 11,
+                                                    size: 28),
+                                                onPressed: () {
+                                                  if (isFullscreen) {
+                                                    _toggleFullscreen();
+                                                  } else {
+                                                    _exitPlayerScreen(
+                                                        currentModule);
+                                                  }
+                                                },
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Expanded(
+                                                child: Text(
+                                                  currentLesson?.title ??
+                                                      'Video Player',
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: GoogleFonts.inter(
+                                                    color: Colors.white,
                                                     fontWeight: FontWeight.w700,
+                                                    fontSize: 13,
                                                   ),
                                                 ),
                                               ),
-
-                                            // Scrub Slider (120 FPS Butter Smooth, Zero Rebuilds)
-                                            SliderTheme(
-                                              data: SliderTheme.of(context).copyWith(
-                                                trackHeight: 3.5,
-                                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6.5),
-                                                activeTrackColor: const Color(0xFF2563EB),
-                                                inactiveTrackColor: Colors.white.withValues(alpha: 0.25),
-                                                thumbColor: Colors.white,
-                                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                                              ),
-                                              child: Slider(
-                                                value: liveSliderVal,
-                                                min: 0.0,
-                                                max: validMax,
-                                                onChangeStart: (val) {
-                                                  _dragPositionNotifier.value = val;
-                                                  _controlsTimer?.cancel();
-                                                },
-                                                onChanged: (val) {
-                                                  _dragPositionNotifier.value = val;
-                                                },
-                                                onChangeEnd: (val) async {
-                                                  _dragPositionNotifier.value = -1.0;
-                                                  if (_controller != null && _controller!.value.isInitialized) {
-                                                    await _controller!.seekTo(Duration(milliseconds: val.toInt()));
-                                                    await _controller!.play();
-                                                  }
+                                              if (isFullscreen)
+                                                IconButton(
+                                                  icon: const Icon(
+                                                      Icons
+                                                          .screen_rotation_rounded,
+                                                      color: Colors.white,
+                                                      size: 20),
+                                                  tooltip:
+                                                      'Flip Landscape Direction',
+                                                  onPressed:
+                                                      _flipLandscapeOrientation,
+                                                ),
+                                              IconButton(
+                                                icon: Icon(
+                                                  _isScreenLocked
+                                                      ? Icons.lock_rounded
+                                                      : Icons.lock_open_rounded,
+                                                  color: _isScreenLocked
+                                                      ? AppColors.accentAmber
+                                                      : Colors.white,
+                                                  size: 20,
+                                                ),
+                                                onPressed: () {
+                                                  setState(() =>
+                                                      _isScreenLocked =
+                                                          !_isScreenLocked);
                                                   _resetControlsTimer();
                                                 },
                                               ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+
+                                    // Center Quick Controls (Replay 10, Glowing Blue Play/Pause, Forward 10)
+                                    if (!_isScreenLocked && !_isInitialStandby)
+                                      Center(
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            // Replay 10s Button
+                                            Container(
+                                              width: 44,
+                                              height: 44,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black
+                                                    .withValues(alpha: 0.45),
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                            alpha: 0.15)),
+                                              ),
+                                              child: IconButton(
+                                                padding: EdgeInsets.zero,
+                                                icon: const Icon(
+                                                    Icons.replay_10_rounded,
+                                                    color: Colors.white,
+                                                    size: 24),
+                                                onPressed: _onDoubleTapLeft,
+                                              ),
                                             ),
+                                            const SizedBox(width: 24),
 
-                                            // Bottom Controls Row
-                                            Row(
-                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                              children: [
-                                                // Monospace Timestamps (Smooth 60 FPS real-time update)
-                                                RichText(
-                                                  text: TextSpan(
-                                                    style: GoogleFonts.robotoMono(fontSize: 12, fontWeight: FontWeight.w600),
-                                                    children: [
-                                                      TextSpan(
-                                                        text: DurationFormatter.formatTimestamp((livePosMs / 1000).toInt()),
-                                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-                                                      ),
-                                                      TextSpan(
-                                                        text: ' / ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
-                                                        style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-
-                                                // Right: Speed Capsule [ 1.5x ⚡ ] + Fullscreen Button
-                                                Row(
-                                                  mainAxisSize: MainAxisSize.min,
-                                                  children: [
-                                                    // Speed Selector Capsule Button
-                                                    InkWell(
-                                                      onTap: _showSpeedSelectionModal,
-                                                      borderRadius: BorderRadius.circular(16),
-                                                      child: Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(0xFF1E293B).withValues(alpha: 0.85),
-                                                          borderRadius: BorderRadius.circular(16),
-                                                          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const Icon(Icons.bolt_rounded, size: 14, color: Colors.white),
-                                                            const SizedBox(width: 4),
-                                                            Text(
-                                                              '${_playbackSpeed == 1.0 ? '1' : _playbackSpeed}x',
-                                                              style: GoogleFonts.inter(
-                                                                color: Colors.white,
-                                                                fontSize: 11,
-                                                                fontWeight: FontWeight.w800,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 10),
-                                                    // Fullscreen Button
-                                                    Container(
-                                                      width: 34,
-                                                      height: 34,
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.black.withValues(alpha: 0.4),
-                                                        shape: BoxShape.circle,
-                                                      ),
-                                                      child: IconButton(
-                                                        padding: EdgeInsets.zero,
-                                                        icon: Icon(
-                                                          isFullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                                                          color: Colors.white,
-                                                          size: 22,
-                                                        ),
-                                                        onPressed: _toggleFullscreen,
-                                                      ),
-                                                    ),
+                                            // Glowing Large Play / Pause
+                                            Container(
+                                              width: 64,
+                                              height: 64,
+                                              decoration: BoxDecoration(
+                                                gradient: const LinearGradient(
+                                                  colors: [
+                                                    Color(0xFF3B82F6),
+                                                    Color(0xFF1D4ED8)
                                                   ],
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
                                                 ),
-                                              ],
+                                                shape: BoxShape.circle,
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color:
+                                                        const Color(0xFF2563EB)
+                                                            .withValues(
+                                                                alpha: 0.5),
+                                                    blurRadius: 22,
+                                                    spreadRadius: 2,
+                                                  ),
+                                                ],
+                                              ),
+                                              child:
+                                                  ValueListenableBuilder<bool>(
+                                                valueListenable:
+                                                    _isPlayingNotifier,
+                                                builder:
+                                                    (context, isPlaying, _) {
+                                                  return ValueListenableBuilder<
+                                                      bool>(
+                                                    valueListenable:
+                                                        _bufferingNotifier,
+                                                    builder: (context,
+                                                        isBuffering, _) {
+                                                      final bool showSpin =
+                                                          isBuffering ||
+                                                              _isSeeking;
+                                                      return IconButton(
+                                                        padding:
+                                                            EdgeInsets.zero,
+                                                        icon: showSpin
+                                                            ? const SizedBox(
+                                                                width: 28,
+                                                                height: 28,
+                                                                child: CircularProgressIndicator(
+                                                                    strokeWidth:
+                                                                        3,
+                                                                    color: Colors
+                                                                        .white),
+                                                              )
+                                                            : Icon(
+                                                                isPlaying
+                                                                    ? Icons
+                                                                        .pause_rounded
+                                                                    : Icons
+                                                                        .play_arrow_rounded,
+                                                                color: Colors
+                                                                    .white,
+                                                                size: 38,
+                                                              ),
+                                                        onPressed: showSpin
+                                                            ? null
+                                                            : _togglePlayPause,
+                                                      );
+                                                    },
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                            const SizedBox(width: 24),
+
+                                            // Forward 10s Button
+                                            Container(
+                                              width: 44,
+                                              height: 44,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black
+                                                    .withValues(alpha: 0.45),
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                            alpha: 0.15)),
+                                              ),
+                                              child: IconButton(
+                                                padding: EdgeInsets.zero,
+                                                icon: const Icon(
+                                                    Icons.forward_10_rounded,
+                                                    color: Colors.white,
+                                                    size: 24),
+                                                onPressed: _onDoubleTapRight,
+                                              ),
                                             ),
                                           ],
                                         ),
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
+                                      ),
+                                    // Bottom Scrubber Bar & Controls Row
+                                    if (!_isScreenLocked &&
+                                        !_isInitialStandby &&
+                                        _controller != null)
+                                      Positioned(
+                                        bottom: 0,
+                                        left: 0,
+                                        right: 0,
+                                        child: ValueListenableBuilder<
+                                            VideoPlayerValue>(
+                                          valueListenable: _controller!,
+                                          builder: (context, playerVal, _) {
+                                            return ValueListenableBuilder<
+                                                double>(
+                                              valueListenable:
+                                                  _dragPositionNotifier,
+                                              builder: (context, dragPos, _) {
+                                                final bool isDragging =
+                                                    dragPos >= 0;
+                                                final double livePosMs =
+                                                    isDragging
+                                                        ? dragPos
+                                                        : playerVal.position
+                                                            .inMilliseconds
+                                                            .toDouble();
+                                                final double liveDurMs =
+                                                    playerVal
+                                                        .duration.inMilliseconds
+                                                        .toDouble();
+                                                final double validMax =
+                                                    liveDurMs > 0
+                                                        ? liveDurMs
+                                                        : 1.0;
+                                                final double liveSliderVal =
+                                                    livePosMs.clamp(
+                                                        0.0, validMax);
+
+                                                return Container(
+                                                  padding:
+                                                      const EdgeInsets.fromLTRB(
+                                                          14, 0, 14, 10),
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      // Drag Position Floating Indicator
+                                                      if (isDragging)
+                                                        Container(
+                                                          margin:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                                  bottom: 4),
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal:
+                                                                      10,
+                                                                  vertical: 4),
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            color: Colors.black
+                                                                .withValues(
+                                                                    alpha:
+                                                                        0.85),
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        12),
+                                                            border: Border.all(
+                                                                color: AppColors
+                                                                    .primary
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.6)),
+                                                          ),
+                                                          child: Text(
+                                                            '${DurationFormatter.formatTimestamp((dragPos / 1000).toInt())}  /  ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
+                                                            style: GoogleFonts
+                                                                .robotoMono(
+                                                              color:
+                                                                  Colors.white,
+                                                              fontSize: 11,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                            ),
+                                                          ),
+                                                        ),
+
+                                                      // Scrub Slider (120 FPS Butter Smooth, Zero Rebuilds)
+                                                      SliderTheme(
+                                                        data: SliderTheme.of(
+                                                                context)
+                                                            .copyWith(
+                                                          trackHeight: 3.5,
+                                                          thumbShape:
+                                                              const RoundSliderThumbShape(
+                                                                  enabledThumbRadius:
+                                                                      6.5),
+                                                          activeTrackColor:
+                                                              const Color(
+                                                                  0xFF2563EB),
+                                                          inactiveTrackColor:
+                                                              Colors
+                                                                  .white
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.25),
+                                                          thumbColor:
+                                                              Colors.white,
+                                                          overlayShape:
+                                                              const RoundSliderOverlayShape(
+                                                                  overlayRadius:
+                                                                      12),
+                                                        ),
+                                                        child: Slider(
+                                                          value: liveSliderVal,
+                                                          min: 0.0,
+                                                          max: validMax,
+                                                          onChangeStart: (val) {
+                                                            _dragPositionNotifier
+                                                                .value = val;
+                                                            _controlsTimer
+                                                                ?.cancel();
+                                                          },
+                                                          onChanged: (val) {
+                                                            _dragPositionNotifier
+                                                                .value = val;
+                                                          },
+                                                          onChangeEnd:
+                                                              (val) async {
+                                                            _dragPositionNotifier
+                                                                .value = -1.0;
+                                                            if (_controller !=
+                                                                    null &&
+                                                                _controller!
+                                                                    .value
+                                                                    .isInitialized) {
+                                                              await _controller!
+                                                                  .seekTo(Duration(
+                                                                      milliseconds:
+                                                                          val.toInt()));
+                                                              await _controller!
+                                                                  .play();
+                                                            }
+                                                            _resetControlsTimer();
+                                                          },
+                                                        ),
+                                                      ),
+
+                                                      // Bottom Controls Row
+                                                      Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .spaceBetween,
+                                                        children: [
+                                                          // Monospace Timestamps (Smooth 60 FPS real-time update)
+                                                          RichText(
+                                                            text: TextSpan(
+                                                              style: GoogleFonts
+                                                                  .robotoMono(
+                                                                      fontSize:
+                                                                          12,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w600),
+                                                              children: [
+                                                                TextSpan(
+                                                                  text: DurationFormatter.formatTimestamp(
+                                                                      (livePosMs /
+                                                                              1000)
+                                                                          .toInt()),
+                                                                  style: const TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w800),
+                                                                ),
+                                                                TextSpan(
+                                                                  text:
+                                                                      ' / ${DurationFormatter.formatTimestamp((liveDurMs / 1000).toInt())}',
+                                                                  style: TextStyle(
+                                                                      color: Colors
+                                                                          .white
+                                                                          .withValues(
+                                                                              alpha: 0.65)),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+
+                                                          // Right: Speed Capsule [ 1.5x ⚡ ] + Fullscreen Button
+                                                          Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              // Speed Selector Capsule Button
+                                                              InkWell(
+                                                                onTap:
+                                                                    _showSpeedSelectionModal,
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            16),
+                                                                child:
+                                                                    Container(
+                                                                  padding: const EdgeInsets
+                                                                      .symmetric(
+                                                                      horizontal:
+                                                                          10,
+                                                                      vertical:
+                                                                          5),
+                                                                  decoration:
+                                                                      BoxDecoration(
+                                                                    color: const Color(
+                                                                            0xFF1E293B)
+                                                                        .withValues(
+                                                                            alpha:
+                                                                                0.85),
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                            16),
+                                                                    border: Border.all(
+                                                                        color: Colors
+                                                                            .white
+                                                                            .withValues(alpha: 0.2)),
+                                                                  ),
+                                                                  child: Row(
+                                                                    mainAxisSize:
+                                                                        MainAxisSize
+                                                                            .min,
+                                                                    children: [
+                                                                      const Icon(
+                                                                          Icons
+                                                                              .bolt_rounded,
+                                                                          size:
+                                                                              14,
+                                                                          color:
+                                                                              Colors.white),
+                                                                      const SizedBox(
+                                                                          width:
+                                                                              4),
+                                                                      Text(
+                                                                        '${_playbackSpeed == 1.0 ? '1' : _playbackSpeed}x',
+                                                                        style: GoogleFonts
+                                                                            .inter(
+                                                                          color:
+                                                                              Colors.white,
+                                                                          fontSize:
+                                                                              11,
+                                                                          fontWeight:
+                                                                              FontWeight.w800,
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                  width: 10),
+                                                              // Fullscreen Button
+                                                              Container(
+                                                                width: 34,
+                                                                height: 34,
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: Colors
+                                                                      .black
+                                                                      .withValues(
+                                                                          alpha:
+                                                                              0.4),
+                                                                  shape: BoxShape
+                                                                      .circle,
+                                                                ),
+                                                                child:
+                                                                    IconButton(
+                                                                  padding:
+                                                                      EdgeInsets
+                                                                          .zero,
+                                                                  icon: Icon(
+                                                                    isFullscreen
+                                                                        ? Icons
+                                                                            .fullscreen_exit_rounded
+                                                                        : Icons
+                                                                            .fullscreen_rounded,
+                                                                    color: Colors
+                                                                        .white,
+                                                                    size: 22,
+                                                                  ),
+                                                                  onPressed:
+                                                                      _toggleFullscreen,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              },
+                                            );
+                                          },
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -1542,65 +1912,672 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               // Lecture Title & Info Card
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF131D31) : Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: isDark ? AppColors.primary.withValues(alpha: 0.2) : AppColors.primaryLight.withValues(alpha: 0.6),
-                                    borderRadius: BorderRadius.circular(6),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? const Color(0xFF131D31)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? const Color(0xFF22324E)
+                                        : const Color(0xFFE2E8F0),
                                   ),
-                                  child: Text(
-                                    currentModule?.title ?? 'Module',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.primary,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                          alpha: isDark ? 0.2 : 0.03),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
                                     ),
-                                  ),
+                                  ],
                                 ),
-                                const SizedBox(width: 8),
-                                Consumer<ProgressProvider>(
-                                  builder: (context, pp, _) {
-                                    final isDone = pp.isLessonCompleted(_currentCourseId, _currentLessonId);
-                                    if (!isDone) return const SizedBox.shrink();
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF059669).withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(color: const Color(0xFF059669).withValues(alpha: 0.3)),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(Icons.check_circle_rounded, size: 12, color: Color(0xFF059669)),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            'Finished',
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: isDark
+                                                ? AppColors.primary
+                                                    .withValues(alpha: 0.2)
+                                                : AppColors.primaryLight
+                                                    .withValues(alpha: 0.6),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            currentModule?.title ?? 'Module',
                                             style: GoogleFonts.inter(
                                               fontSize: 10,
                                               fontWeight: FontWeight.w700,
-                                              color: const Color(0xFF059669),
+                                              color: AppColors.primary,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Consumer<ProgressProvider>(
+                                          builder: (context, pp, _) {
+                                            final isDone = pp.isLessonCompleted(
+                                                _currentCourseId,
+                                                _currentLessonId);
+                                            if (!isDone)
+                                              return const SizedBox.shrink();
+                                            return Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF059669)
+                                                    .withValues(alpha: 0.15),
+                                                borderRadius:
+                                                    BorderRadius.circular(6),
+                                                border: Border.all(
+                                                    color:
+                                                        const Color(0xFF059669)
+                                                            .withValues(
+                                                                alpha: 0.3)),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                      Icons
+                                                          .check_circle_rounded,
+                                                      size: 12,
+                                                      color: Color(0xFF059669)),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    'Finished',
+                                                    style: GoogleFonts.inter(
+                                                      fontSize: 10,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: const Color(
+                                                          0xFF059669),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      currentLesson?.title ?? 'Lesson',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w800,
+                                        color: isDark
+                                            ? Colors.white
+                                            : const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${course.title} • ${DurationFormatter.formatTimestamp(currentLesson?.duration?.toInt() ?? 0)}',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 11,
+                                        color: isDark
+                                            ? const Color(0xFF94A3B8)
+                                            : const Color(0xFF64748B),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 14),
+
+                                    // ── 3 Action Buttons in 1 Row (Mark Done, Save, Download) ──
+                                    Consumer2<BookmarkProvider,
+                                        ProgressProvider>(
+                                      builder: (context, bp, pp, _) {
+                                        final isBm =
+                                            bp.isBookmarked(_currentLessonId);
+                                        final isDone = pp.isLessonCompleted(
+                                            _currentCourseId, _currentLessonId);
+
+                                        return Row(
+                                          children: [
+                                            // 1. Mark Done / Finished Button (Instant Single-Click)
+                                            Expanded(
+                                              child: ElevatedButton.icon(
+                                                onPressed: () {
+                                                  HapticFeedback.lightImpact();
+                                                  if (currentLesson != null) {
+                                                    final authPhone = context
+                                                        .read<AuthProvider>()
+                                                        .phoneNumber;
+                                                    final dur =
+                                                        (totalDurationMs / 1000)
+                                                            .toInt();
+                                                    final effectiveDur = dur > 0
+                                                        ? dur
+                                                        : (currentLesson
+                                                                .duration
+                                                                ?.toInt() ??
+                                                            60);
+                                                    pp.toggleLessonCompleted(
+                                                      courseId: course.id,
+                                                      lessonId:
+                                                          currentLesson.id,
+                                                      durationSeconds:
+                                                          effectiveDur > 0
+                                                              ? effectiveDur
+                                                              : 60,
+                                                      userPhone: authPhone,
+                                                    );
+                                                    ToastUtils.showSnackBar(
+                                                      context,
+                                                      !isDone
+                                                          ? 'Marked as completed!'
+                                                          : 'Marked as uncompleted',
+                                                      isSuccess: !isDone,
+                                                    );
+                                                  }
+                                                },
+                                                icon: Icon(
+                                                  isDone
+                                                      ? Icons
+                                                          .check_circle_rounded
+                                                      : Icons
+                                                          .check_circle_outline_rounded,
+                                                  size: 16,
+                                                ),
+                                                label: Text(
+                                                  isDone
+                                                      ? 'Finished'
+                                                      : 'Mark Done',
+                                                  style: GoogleFonts.inter(
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w700),
+                                                ),
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: isDone
+                                                      ? const Color(0xFF059669)
+                                                      : (isDark
+                                                          ? const Color(
+                                                              0xFF1E293B)
+                                                          : const Color(
+                                                              0xFFF1F5F9)),
+                                                  foregroundColor: isDone
+                                                      ? Colors.white
+                                                      : (isDark
+                                                          ? Colors.white
+                                                          : const Color(
+                                                              0xFF0F172A)),
+                                                  elevation: 0,
+                                                  padding: const EdgeInsets
+                                                      .symmetric(vertical: 10),
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12),
+                                                    side: BorderSide(
+                                                      color: isDone
+                                                          ? const Color(
+                                                              0xFF059669)
+                                                          : (isDark
+                                                              ? const Color(
+                                                                  0xFF334155)
+                                                              : const Color(
+                                                                  0xFFCBD5E1)),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+
+                                            // 2. Bookmark / Save Button (Instant Single-Click)
+                                            Expanded(
+                                              child: ElevatedButton.icon(
+                                                onPressed: () {
+                                                  HapticFeedback.lightImpact();
+                                                  if (currentLesson != null) {
+                                                    bp.toggleBookmark(
+                                                      courseId: course.id,
+                                                      lessonId:
+                                                          currentLesson.id,
+                                                      title:
+                                                          currentLesson.title,
+                                                      courseTitle: course.title,
+                                                      duration: currentLesson
+                                                          .duration,
+                                                      userPhone: context
+                                                          .read<AuthProvider>()
+                                                          .phoneNumber,
+                                                    );
+                                                    ToastUtils.showSnackBar(
+                                                      context,
+                                                      isBm
+                                                          ? 'Removed from bookmarks'
+                                                          : 'Added to bookmarks',
+                                                      isSuccess: !isBm,
+                                                    );
+                                                  }
+                                                },
+                                                icon: Icon(
+                                                  isBm
+                                                      ? Icons.bookmark_rounded
+                                                      : Icons
+                                                          .bookmark_border_rounded,
+                                                  size: 16,
+                                                ),
+                                                label: Text(
+                                                  isBm ? 'Saved' : 'Bookmark',
+                                                  style: GoogleFonts.inter(
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w700),
+                                                ),
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: isBm
+                                                      ? AppColors.primary
+                                                      : (isDark
+                                                          ? const Color(
+                                                              0xFF1E293B)
+                                                          : const Color(
+                                                              0xFFF1F5F9)),
+                                                  foregroundColor: isBm
+                                                      ? Colors.white
+                                                      : (isDark
+                                                          ? Colors.white
+                                                          : const Color(
+                                                              0xFF0F172A)),
+                                                  elevation: 0,
+                                                  padding: const EdgeInsets
+                                                      .symmetric(vertical: 10),
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12),
+                                                    side: BorderSide(
+                                                      color: isBm
+                                                          ? AppColors.primary
+                                                          : (isDark
+                                                              ? const Color(
+                                                                  0xFF334155)
+                                                              : const Color(
+                                                                  0xFFCBD5E1)),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+
+                                            // 3. Download Button
+                                            Expanded(
+                                              child: Consumer<DownloadProvider>(
+                                                builder: (ctx, dlProvider, _) {
+                                                  final task =
+                                                      dlProvider.getTask(
+                                                          course.id,
+                                                          _currentLessonId,
+                                                          'video');
+                                                  final isDownloaded =
+                                                      dlProvider.isDownloaded(
+                                                          course.id,
+                                                          _currentLessonId,
+                                                          'video');
+
+                                                  if (task != null &&
+                                                      task.isDownloading) {
+                                                    return Container(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          vertical: 9),
+                                                      decoration: BoxDecoration(
+                                                        color: AppColors.primary
+                                                            .withValues(
+                                                                alpha: 0.15),
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(12),
+                                                        border: Border.all(
+                                                            color: AppColors
+                                                                .primary
+                                                                .withValues(
+                                                                    alpha:
+                                                                        0.4)),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .center,
+                                                        children: [
+                                                          SizedBox(
+                                                            width: 12,
+                                                            height: 12,
+                                                            child:
+                                                                CircularProgressIndicator(
+                                                              value: task.progress >
+                                                                      0
+                                                                  ? task
+                                                                      .progress
+                                                                  : null,
+                                                              strokeWidth: 2,
+                                                              color: AppColors
+                                                                  .primary,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 6),
+                                                          Text(
+                                                            '${(task.progress * 100).toInt()}%',
+                                                            style: const TextStyle(
+                                                                fontSize: 11,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color: AppColors
+                                                                    .primary),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                  } else if (isDownloaded) {
+                                                    return ElevatedButton.icon(
+                                                      onPressed: () {
+                                                        ToastUtils.showSnackBar(
+                                                            context,
+                                                            'This lecture is saved for offline watching');
+                                                      },
+                                                      icon: const Icon(
+                                                          Icons
+                                                              .download_done_rounded,
+                                                          size: 16),
+                                                      label: Text(
+                                                        'Offline',
+                                                        style:
+                                                            GoogleFonts.inter(
+                                                                fontSize: 11,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700),
+                                                      ),
+                                                      style: ElevatedButton
+                                                          .styleFrom(
+                                                        backgroundColor:
+                                                            const Color(
+                                                                0xFF059669),
+                                                        foregroundColor:
+                                                            Colors.white,
+                                                        elevation: 0,
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                vertical: 10),
+                                                        shape: RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        12)),
+                                                      ),
+                                                    );
+                                                  } else {
+                                                    return ElevatedButton.icon(
+                                                      onPressed: () {
+                                                        if (currentLesson !=
+                                                            null) {
+                                                          dlProvider
+                                                              .startDownload(
+                                                            course: course,
+                                                            lesson:
+                                                                currentLesson,
+                                                            userPhone:
+                                                                authProvider
+                                                                    .phoneNumber,
+                                                          );
+                                                          ToastUtils
+                                                              .showSnackBar(
+                                                            context,
+                                                            'Downloading "${currentLesson.title}"...',
+                                                            isSuccess: true,
+                                                          );
+                                                        }
+                                                      },
+                                                      icon: const Icon(
+                                                          Icons
+                                                              .download_rounded,
+                                                          size: 16),
+                                                      label: Text(
+                                                        'Download',
+                                                        style:
+                                                            GoogleFonts.inter(
+                                                                fontSize: 11,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700),
+                                                      ),
+                                                      style: ElevatedButton
+                                                          .styleFrom(
+                                                        backgroundColor:
+                                                            AppColors.primary,
+                                                        foregroundColor:
+                                                            Colors.white,
+                                                        elevation: 0,
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                vertical: 10),
+                                                        shape: RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        12)),
+                                                      ),
+                                                    );
+                                                  }
+                                                },
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Tabs: Course Playlist / Lesson Notes
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: InkWell(
+                                      onTap: () =>
+                                          setState(() => _activeDrawerTab = 0),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10),
+                                        decoration: BoxDecoration(
+                                          border: Border(
+                                            bottom: BorderSide(
+                                              color: _activeDrawerTab == 0
+                                                  ? AppColors.primary
+                                                  : Colors.transparent,
+                                              width: 2,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.playlist_play_rounded,
+                                              size: 18,
+                                              color: _activeDrawerTab == 0
+                                                  ? AppColors.primary
+                                                  : (isDark
+                                                      ? const Color(0xFF94A3B8)
+                                                      : const Color(
+                                                          0xFF64748B)),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              'Course Playlist',
+                                              style: GoogleFonts.inter(
+                                                fontSize: 12,
+                                                fontWeight:
+                                                    _activeDrawerTab == 0
+                                                        ? FontWeight.w700
+                                                        : FontWeight.w500,
+                                                color: _activeDrawerTab == 0
+                                                    ? AppColors.primary
+                                                    : (isDark
+                                                        ? const Color(
+                                                            0xFF94A3B8)
+                                                        : const Color(
+                                                            0xFF64748B)),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: InkWell(
+                                      onTap: () =>
+                                          setState(() => _activeDrawerTab = 1),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10),
+                                        decoration: BoxDecoration(
+                                          border: Border(
+                                            bottom: BorderSide(
+                                              color: _activeDrawerTab == 1
+                                                  ? AppColors.primary
+                                                  : Colors.transparent,
+                                              width: 2,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.description_outlined,
+                                              size: 16,
+                                              color: _activeDrawerTab == 1
+                                                  ? AppColors.primary
+                                                  : (isDark
+                                                      ? const Color(0xFF94A3B8)
+                                                      : const Color(
+                                                          0xFF64748B)),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              'Lesson Notes (${currentModule?.notes.length ?? 0})',
+                                              style: GoogleFonts.inter(
+                                                fontSize: 12,
+                                                fontWeight:
+                                                    _activeDrawerTab == 1
+                                                        ? FontWeight.w700
+                                                        : FontWeight.w500,
+                                                color: _activeDrawerTab == 1
+                                                    ? AppColors.primary
+                                                    : (isDark
+                                                        ? const Color(
+                                                            0xFF94A3B8)
+                                                        : const Color(
+                                                            0xFF64748B)),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+
+                              // Tab 1: Course Playlist Queue
+                              if (_activeDrawerTab == 0) ...[
+                                // ── Sub-Module Progress Header Banner (Web Parity) ──
+                                Consumer<ProgressProvider>(
+                                  builder: (context, pp, _) {
+                                    final completedCount = moduleLessons
+                                        .where((l) => pp.isLessonCompleted(
+                                            _currentCourseId, l.id))
+                                        .length;
+                                    final completionPct =
+                                        totalModuleLessonsCount > 0
+                                            ? ((completedCount /
+                                                        totalModuleLessonsCount) *
+                                                    100)
+                                                .toInt()
+                                            : 0;
+
+                                    return Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: isDark
+                                            ? const Color(0xFF1E293B)
+                                                .withValues(alpha: 0.6)
+                                            : AppColors.primaryLight
+                                                .withValues(alpha: 0.4),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: isDark
+                                              ? const Color(0xFF334155)
+                                              : const Color(0xFFCBD5E1),
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                'Module Progress',
+                                                style: GoogleFonts.inter(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : const Color(0xFF0F172A),
+                                                ),
+                                              ),
+                                              Text(
+                                                '$completedCount / $totalModuleLessonsCount ($completionPct%)',
+                                                style: GoogleFonts.inter(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: AppColors.primary,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 6),
+                                          ClipRRect(
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                            child: LinearProgressIndicator(
+                                              value: totalModuleLessonsCount > 0
+                                                  ? completedCount /
+                                                      totalModuleLessonsCount
+                                                  : 0.0,
+                                              backgroundColor: isDark
+                                                  ? const Color(0xFF334155)
+                                                  : const Color(0xFFE2E8F0),
+                                              valueColor:
+                                                  const AlwaysStoppedAnimation<
+                                                      Color>(AppColors.primary),
+                                              minHeight: 6,
                                             ),
                                           ),
                                         ],
@@ -1608,664 +2585,470 @@ class _YouTubeVideoPlayerScreenState extends State<YouTubeVideoPlayerScreen>
                                     );
                                   },
                                 ),
+                                const SizedBox(height: 12),
                               ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              currentLesson?.title ?? 'Lesson',
-                              style: GoogleFonts.inter(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                                color: isDark ? Colors.white : const Color(0xFF0F172A),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${course.title} • ${DurationFormatter.formatTimestamp(currentLesson?.duration?.toInt() ?? 0)}',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                              ),
-                            ),
-                            const SizedBox(height: 14),
+                            ],
+                          ),
+                        ),
+                      ),
 
-                            // ── 3 Action Buttons in 1 Row (Mark Done, Save, Download) ──
-                            Consumer2<BookmarkProvider, ProgressProvider>(
-                              builder: (context, bp, pp, _) {
-                                final isBm = bp.isBookmarked(_currentLessonId);
-                                final isDone = pp.isLessonCompleted(_currentCourseId, _currentLessonId);
+                      // Tab 1: Virtualized Course Playlist Queue (0ms lag, 120 FPS recycling)
+                      if (_activeDrawerTab == 0)
+                        SliverPadding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          sliver: SliverList.builder(
+                            itemCount: currentModule?.lessons.length ?? 0,
+                            itemBuilder: (context, idx) {
+                              final l = currentModule!.lessons[idx];
+                              final isCurrent = l.id == _currentLessonId;
 
-                                return Row(
-                                  children: [
-                                    // 1. Mark Done / Finished Button (Instant Single-Click)
-                                    Expanded(
-                                      child: ElevatedButton.icon(
-                                        onPressed: () {
-                                          HapticFeedback.lightImpact();
-                                          if (currentLesson != null) {
-                                            final authPhone = context.read<AuthProvider>().phoneNumber;
-                                            final dur = (totalDurationMs / 1000).toInt();
-                                            final effectiveDur = dur > 0 ? dur : (currentLesson.duration?.toInt() ?? 60);
-                                            pp.toggleLessonCompleted(
-                                              courseId: course.id,
-                                              lessonId: currentLesson.id,
-                                              durationSeconds: effectiveDur > 0 ? effectiveDur : 60,
-                                              userPhone: authPhone,
-                                            );
-                                            ToastUtils.showSnackBar(
-                                              context,
-                                              !isDone ? 'Marked as completed!' : 'Marked as uncompleted',
-                                              isSuccess: !isDone,
-                                            );
-                                          }
-                                        },
-                                        icon: Icon(
-                                          isDone ? Icons.check_circle_rounded : Icons.check_circle_outline_rounded,
-                                          size: 16,
-                                        ),
-                                        label: Text(
-                                          isDone ? 'Finished' : 'Mark Done',
-                                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
-                                        ),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: isDone
-                                              ? const Color(0xFF059669)
-                                              : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
-                                          foregroundColor: isDone
-                                              ? Colors.white
-                                              : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                          elevation: 0,
-                                          padding: const EdgeInsets.symmetric(vertical: 10),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(12),
-                                            side: BorderSide(
-                                              color: isDone
-                                                  ? const Color(0xFF059669)
-                                                  : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
+                              return Consumer<ProgressProvider>(
+                                builder: (context, pp, _) {
+                                  final isDone = pp.isLessonCompleted(
+                                      _currentCourseId, l.id);
+                                  final isLastWatched =
+                                      pp.continueWatching?.lessonId == l.id;
+                                  final progressPct =
+                                      pp.getLessonProgressPercent(
+                                          _currentCourseId,
+                                          l.id,
+                                          l.duration?.toInt() ?? 0);
+                                  final progressFrac =
+                                      pp.getLessonProgressFraction(
+                                          _currentCourseId,
+                                          l.id,
+                                          l.duration?.toInt() ?? 0);
 
-                                    // 2. Bookmark / Save Button (Instant Single-Click)
-                                    Expanded(
-                                      child: ElevatedButton.icon(
-                                        onPressed: () {
-                                          HapticFeedback.lightImpact();
-                                          if (currentLesson != null) {
-                                            bp.toggleBookmark(
-                                              courseId: course.id,
-                                              lessonId: currentLesson.id,
-                                              title: currentLesson.title,
-                                              courseTitle: course.title,
-                                              duration: currentLesson.duration,
-                                              userPhone: context.read<AuthProvider>().phoneNumber,
-                                            );
-                                            ToastUtils.showSnackBar(
-                                              context,
-                                              isBm ? 'Removed from bookmarks' : 'Added to bookmarks',
-                                              isSuccess: !isBm,
-                                            );
-                                          }
-                                        },
-                                        icon: Icon(
-                                          isBm ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                                          size: 16,
-                                        ),
-                                        label: Text(
-                                          isBm ? 'Saved' : 'Bookmark',
-                                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
-                                        ),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: isBm
-                                              ? AppColors.primary
-                                              : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
-                                          foregroundColor: isBm
-                                              ? Colors.white
-                                              : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                          elevation: 0,
-                                          padding: const EdgeInsets.symmetric(vertical: 10),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(12),
-                                            side: BorderSide(
-                                              color: isBm
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: RepaintBoundary(
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: isCurrent
+                                              ? (isDark
                                                   ? AppColors.primary
-                                                  : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                                      .withValues(alpha: 0.18)
+                                                  : AppColors.primaryLight
+                                                      .withValues(alpha: 0.6))
+                                              : (isDark
+                                                  ? const Color(0xFF131D31)
+                                                  : Colors.white),
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                          border: Border.all(
+                                            color: isCurrent
+                                                ? AppColors.primary
+                                                : (isDark
+                                                    ? const Color(0xFF22324E)
+                                                    : const Color(0xFFE2E8F0)),
+                                          ),
+                                        ),
+                                        child: ListTile(
+                                          dense: true,
+                                          onTap: () => _switchLesson(l.id),
+                                          leading: Container(
+                                            width: 30,
+                                            height: 30,
+                                            decoration: BoxDecoration(
+                                              color: isCurrent
+                                                  ? AppColors.primary
+                                                  : (isDone
+                                                      ? const Color(0xFF059669)
+                                                          .withValues(
+                                                              alpha: 0.15)
+                                                      : (isDark
+                                                          ? const Color(
+                                                              0xFF1E293B)
+                                                          : const Color(
+                                                              0xFFF1F5F9))),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
                                             ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-
-                                    // 3. Download Button
-                                    Expanded(
-                                      child: Consumer<DownloadProvider>(
-                                    builder: (ctx, dlProvider, _) {
-                                      final task = dlProvider.getTask(course.id, _currentLessonId, 'video');
-                                      final isDownloaded = dlProvider.isDownloaded(course.id, _currentLessonId, 'video');
-
-                                      if (task != null && task.isDownloading) {
-                                        return Container(
-                                          padding: const EdgeInsets.symmetric(vertical: 9),
-                                          decoration: BoxDecoration(
-                                            color: AppColors.primary.withValues(alpha: 0.15),
-                                            borderRadius: BorderRadius.circular(12),
-                                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
-                                          ),
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              SizedBox(
-                                                width: 12,
-                                                height: 12,
-                                                child: CircularProgressIndicator(
-                                                  value: task.progress > 0 ? task.progress : null,
-                                                  strokeWidth: 2,
-                                                  color: AppColors.primary,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                '${(task.progress * 100).toInt()}%',
-                                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.primary),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      } else if (isDownloaded) {
-                                        return ElevatedButton.icon(
-                                          onPressed: () {
-                                            ToastUtils.showSnackBar(context, 'This lecture is saved for offline watching');
-                                          },
-                                          icon: const Icon(Icons.download_done_rounded, size: 16),
-                                          label: Text(
-                                            'Offline',
-                                            style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
-                                          ),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(0xFF059669),
-                                            foregroundColor: Colors.white,
-                                            elevation: 0,
-                                            padding: const EdgeInsets.symmetric(vertical: 10),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                          ),
-                                        );
-                                      } else {
-                                        return ElevatedButton.icon(
-                                          onPressed: () {
-                                            if (currentLesson != null) {
-                                              dlProvider.startDownload(
-                                                course: course,
-                                                lesson: currentLesson,
-                                                userPhone: authProvider.phoneNumber,
-                                              );
-                                              ToastUtils.showSnackBar(
-                                                context,
-                                                'Downloading "${currentLesson.title}"...',
-                                                isSuccess: true,
-                                              );
-                                            }
-                                          },
-                                          icon: const Icon(Icons.download_rounded, size: 16),
-                                          label: Text(
-                                            'Download',
-                                            style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700),
-                                          ),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: AppColors.primary,
-                                            foregroundColor: Colors.white,
-                                            elevation: 0,
-                                            padding: const EdgeInsets.symmetric(vertical: 10),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                          ),
-                                        );
-                                      }
-                                    },
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Tabs: Course Playlist / Lesson Notes
-                      Row(
-                        children: [
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => setState(() => _activeDrawerTab = 0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: _activeDrawerTab == 0 ? AppColors.primary : Colors.transparent,
-                                      width: 2,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.playlist_play_rounded,
-                                      size: 18,
-                                      color: _activeDrawerTab == 0 ? AppColors.primary : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'Course Playlist',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        fontWeight: _activeDrawerTab == 0 ? FontWeight.w700 : FontWeight.w500,
-                                        color: _activeDrawerTab == 0 ? AppColors.primary : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => setState(() => _activeDrawerTab = 1),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: _activeDrawerTab == 1 ? AppColors.primary : Colors.transparent,
-                                      width: 2,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.description_outlined,
-                                      size: 16,
-                                      color: _activeDrawerTab == 1 ? AppColors.primary : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'Lesson Notes (${currentModule?.notes.length ?? 0})',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        fontWeight: _activeDrawerTab == 1 ? FontWeight.w700 : FontWeight.w500,
-                                        color: _activeDrawerTab == 1 ? AppColors.primary : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-
-                      // Tab 1: Course Playlist Queue
-                      if (_activeDrawerTab == 0) ...[
-                        // ── Sub-Module Progress Header Banner (Web Parity) ──
-                        Consumer<ProgressProvider>(
-                          builder: (context, pp, _) {
-                            final completedCount = moduleLessons.where((l) => pp.isLessonCompleted(_currentCourseId, l.id)).length;
-                            final completionPct = totalModuleLessonsCount > 0
-                                ? ((completedCount / totalModuleLessonsCount) * 100).toInt()
-                                : 0;
-
-                            return Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.6) : AppColors.primaryLight.withValues(alpha: 0.4),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
-                                ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        'Module Progress',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          color: isDark ? Colors.white : const Color(0xFF0F172A),
-                                        ),
-                                      ),
-                                      Text(
-                                        '$completedCount / $totalModuleLessonsCount ($completionPct%)',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.primary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: LinearProgressIndicator(
-                                      value: totalModuleLessonsCount > 0
-                                          ? completedCount / totalModuleLessonsCount
-                                          : 0.0,
-                                      backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                      valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                                      minHeight: 6,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-
-              // Tab 1: Virtualized Course Playlist Queue (0ms lag, 120 FPS recycling)
-              if (_activeDrawerTab == 0)
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  sliver: SliverList.builder(
-                    itemCount: currentModule?.lessons.length ?? 0,
-                    itemBuilder: (context, idx) {
-                      final l = currentModule!.lessons[idx];
-                      final isCurrent = l.id == _currentLessonId;
-
-                      return Consumer<ProgressProvider>(
-                        builder: (context, pp, _) {
-                          final isDone = pp.isLessonCompleted(_currentCourseId, l.id);
-                          final isLastWatched = pp.continueWatching?.lessonId == l.id;
-                          final progressPct = pp.getLessonProgressPercent(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
-                          final progressFrac = pp.getLessonProgressFraction(_currentCourseId, l.id, l.duration?.toInt() ?? 0);
-
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: RepaintBoundary(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: isCurrent
-                                  ? (isDark ? AppColors.primary.withValues(alpha: 0.18) : AppColors.primaryLight.withValues(alpha: 0.6))
-                                  : (isDark ? const Color(0xFF131D31) : Colors.white),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: isCurrent
-                                    ? AppColors.primary
-                                    : (isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0)),
-                              ),
-                            ),
-                            child: ListTile(
-                              dense: true,
-                              onTap: () => _switchLesson(l.id),
-                              leading: Container(
-                                width: 30,
-                                height: 30,
-                                decoration: BoxDecoration(
-                                  color: isCurrent
-                                      ? AppColors.primary
-                                      : (isDone
-                                          ? const Color(0xFF059669).withValues(alpha: 0.15)
-                                          : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Center(
-                                  child: isDone
-                                      ? const Icon(Icons.check_rounded, size: 16, color: Color(0xFF059669))
-                                      : Text(
-                                          '${idx + 1}',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                            color: isCurrent ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
-                                          ),
-                                        ),
-                                ),
-                              ),
-                              title: Text(
-                                l.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.inter(
-                                  fontSize: 13,
-                                  fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
-                                  color: isCurrent
-                                      ? AppColors.primary
-                                      : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                                ),
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const SizedBox(height: 2),
-                                  Row(
-                                    children: [
-                                      Text(
-                                        DurationFormatter.formatTimestamp(l.duration?.toInt() ?? 0),
-                                        style: GoogleFonts.inter(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                      ),
-                                      if (isDone) ...[
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          '• Finished',
-                                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF059669)),
-                                        ),
-                                      ] else if (progressPct > 0) ...[
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          '• $progressPct% watched',
-                                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.primary),
-                                        ),
-                                      ],
-                                      if (isLastWatched && !isCurrent) ...[
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                          decoration: BoxDecoration(
-                                            color: AppColors.primary.withValues(alpha: 0.15),
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                          child: const Text(
-                                            '▶ Resume',
-                                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.primary),
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                  if (!isDone && progressFrac > 0) ...[
-                                    const SizedBox(height: 4),
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(2),
-                                      child: LinearProgressIndicator(
-                                        value: progressFrac,
-                                        minHeight: 2.5,
-                                        backgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                        valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              trailing: isCurrent
-                                  ? Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.primary,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: const Text(
-                                        'PLAYING',
-                                        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white),
-                                      ),
-                                    )
-                                  : null,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-                  ),
-                )
-              else if ((currentModule?.notes.isEmpty ?? true))
-                SliverToBoxAdapter(
-                  child: Container(
-                    padding: const EdgeInsets.all(32),
-                    alignment: Alignment.center,
-                    child: Text(
-                      'No notes attached to this module.',
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                      ),
-                    ),
-                  ),
-                )
-              else
-                // Tab 2: Virtualized Lesson Notes
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  sliver: SliverList.builder(
-                    itemCount: currentModule!.notes.length,
-                    itemBuilder: (context, idx) {
-                      final note = currentModule!.notes[idx];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Consumer<DownloadProvider>(
-                          builder: (_, dlProvider, __) {
-                            final task = dlProvider.getTask(course.id, note.id, 'note');
-                            final isDl = dlProvider.isDownloaded(course.id, note.id, 'note');
-
-                            return Container(
-                              decoration: BoxDecoration(
-                                color: isDark ? const Color(0xFF131D31) : Colors.white,
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: isDark ? const Color(0xFF22324E) : const Color(0xFFE2E8F0),
-                                ),
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                borderRadius: BorderRadius.circular(14),
-                                child: InkWell(
-                                  onTap: () => _handleNoteAction(course, note),
-                                  borderRadius: BorderRadius.circular(14),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFEF4444), size: 22),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                note.displayName,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: GoogleFonts.inter(
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: isDark ? Colors.white : const Color(0xFF0F172A),
-                                                ),
-                                              ),
-                                              Text(
-                                                DurationFormatter.formatFileSize(note.size ?? 25000000),
-                                                style: GoogleFonts.inter(fontSize: 10, color: Colors.grey),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (task != null && task.isDownloading) ...[
-                                          Builder(
-                                            builder: (_) {
-                                              final pct = (task.progress * 100).toInt();
-                                              return Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                                decoration: BoxDecoration(
-                                                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                                                  borderRadius: BorderRadius.circular(6),
-                                                ),
-                                                child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
-                                                  children: [
-                                                    const SizedBox(
-                                                      width: 10,
-                                                      height: 10,
-                                                      child: CircularProgressIndicator(
-                                                        strokeWidth: 1.5,
-                                                        color: Color(0xFF10B981),
+                                            child: Center(
+                                              child: isDone
+                                                  ? const Icon(
+                                                      Icons.check_rounded,
+                                                      size: 16,
+                                                      color: Color(0xFF059669))
+                                                  : Text(
+                                                      '${idx + 1}',
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: isCurrent
+                                                            ? Colors.white
+                                                            : (isDark
+                                                                ? Colors.white70
+                                                                : Colors
+                                                                    .black87),
                                                       ),
                                                     ),
-                                                    const SizedBox(width: 5),
+                                            ),
+                                          ),
+                                          title: Text(
+                                            l.title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.inter(
+                                              fontSize: 13,
+                                              fontWeight: isCurrent
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                              color: isCurrent
+                                                  ? AppColors.primary
+                                                  : (isDark
+                                                      ? Colors.white
+                                                      : const Color(
+                                                          0xFF0F172A)),
+                                            ),
+                                          ),
+                                          subtitle: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              const SizedBox(height: 2),
+                                              Row(
+                                                children: [
+                                                  Text(
+                                                    DurationFormatter
+                                                        .formatTimestamp(l
+                                                                .duration
+                                                                ?.toInt() ??
+                                                            0),
+                                                    style: GoogleFonts.inter(
+                                                        fontSize: 11,
+                                                        color: isDark
+                                                            ? const Color(
+                                                                0xFF94A3B8)
+                                                            : const Color(
+                                                                0xFF64748B)),
+                                                  ),
+                                                  if (isDone) ...[
+                                                    const SizedBox(width: 6),
                                                     Text(
-                                                      '$pct%',
+                                                      '• Finished',
                                                       style: GoogleFonts.inter(
-                                                        fontSize: 10,
-                                                        fontWeight: FontWeight.w700,
-                                                        color: const Color(0xFF10B981),
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          color: const Color(
+                                                              0xFF059669)),
+                                                    ),
+                                                  ] else if (progressPct >
+                                                      0) ...[
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      '• $progressPct% watched',
+                                                      style: GoogleFonts.inter(
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: AppColors
+                                                              .primary),
+                                                    ),
+                                                  ],
+                                                  if (isLastWatched &&
+                                                      !isCurrent) ...[
+                                                    const SizedBox(width: 8),
+                                                    Container(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 5,
+                                                          vertical: 1),
+                                                      decoration: BoxDecoration(
+                                                        color: AppColors.primary
+                                                            .withValues(
+                                                                alpha: 0.15),
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(4),
+                                                      ),
+                                                      child: const Text(
+                                                        '▶ Resume',
+                                                        style: TextStyle(
+                                                            fontSize: 9,
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            color: AppColors
+                                                                .primary),
                                                       ),
                                                     ),
                                                   ],
+                                                ],
+                                              ),
+                                              if (!isDone &&
+                                                  progressFrac > 0) ...[
+                                                const SizedBox(height: 4),
+                                                ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(2),
+                                                  child:
+                                                      LinearProgressIndicator(
+                                                    value: progressFrac,
+                                                    minHeight: 2.5,
+                                                    backgroundColor: isDark
+                                                        ? const Color(
+                                                            0xFF334155)
+                                                        : const Color(
+                                                            0xFFE2E8F0),
+                                                    valueColor:
+                                                        const AlwaysStoppedAnimation<
+                                                                Color>(
+                                                            AppColors.primary),
+                                                  ),
                                                 ),
-                                              );
-                                            },
+                                              ],
+                                            ],
                                           ),
-                                        ] else if (task != null && task.error != null) ...[
-                                          IconButton(
-                                            icon: const Icon(Icons.error_outline_rounded, size: 18, color: Color(0xFFEF4444)),
-                                            tooltip: 'Download error: ${task.error}',
-                                            onPressed: () {
-                                              ToastUtils.showSnackBar(context, task.error ?? 'Download failed. Please check connection.', isError: true);
-                                            },
-                                          ),
-                                        ] else if (isDl) ...[
-                                          IconButton(
-                                            icon: const Icon(Icons.open_in_new_rounded, size: 18, color: Color(0xFF10B981)),
-                                            tooltip: 'Open in PDF Viewer',
-                                            onPressed: () => _handleNoteAction(course, note),
-                                          ),
-                                        ] else
-                                          IconButton(
-                                            icon: const Icon(Icons.download_rounded, size: 18, color: AppColors.primary),
-                                            tooltip: 'Download offline',
-                                            onPressed: () => _handleNoteAction(course, note),
-                                          ),
-                                      ],
+                                          trailing: isCurrent
+                                              ? Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2),
+                                                  decoration: BoxDecoration(
+                                                    color: AppColors.primary,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            6),
+                                                  ),
+                                                  child: const Text(
+                                                    'PLAYING',
+                                                    style: TextStyle(
+                                                        fontSize: 9,
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                        color: Colors.white),
+                                                  ),
+                                                )
+                                              : null,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                        )
+                      else if ((currentModule?.notes.isEmpty ?? true))
+                        SliverToBoxAdapter(
+                          child: Container(
+                            padding: const EdgeInsets.all(32),
+                            alignment: Alignment.center,
+                            child: Text(
+                              'No notes attached to this module.',
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: isDark
+                                    ? const Color(0xFF94A3B8)
+                                    : const Color(0xFF64748B),
                               ),
-                            );
-                          },
+                            ),
+                          ),
+                        )
+                      else
+                        // Tab 2: Virtualized Lesson Notes
+                        SliverPadding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          sliver: SliverList.builder(
+                            itemCount: currentModule!.notes.length,
+                            itemBuilder: (context, idx) {
+                              final note = currentModule!.notes[idx];
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Consumer<DownloadProvider>(
+                                  builder: (_, dlProvider, __) {
+                                    final task = dlProvider.getTask(
+                                        course.id, note.id, 'note');
+                                    final isDl = dlProvider.isDownloaded(
+                                        course.id, note.id, 'note');
+
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        color: isDark
+                                            ? const Color(0xFF131D31)
+                                            : Colors.white,
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: isDark
+                                              ? const Color(0xFF22324E)
+                                              : const Color(0xFFE2E8F0),
+                                        ),
+                                      ),
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        borderRadius: BorderRadius.circular(14),
+                                        child: InkWell(
+                                          onTap: () =>
+                                              _handleNoteAction(course, note),
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(12),
+                                            child: Row(
+                                              children: [
+                                                const Icon(
+                                                    Icons
+                                                        .picture_as_pdf_rounded,
+                                                    color: Color(0xFFEF4444),
+                                                    size: 22),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        note.displayName,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style:
+                                                            GoogleFonts.inter(
+                                                          fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: isDark
+                                                              ? Colors.white
+                                                              : const Color(
+                                                                  0xFF0F172A),
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        DurationFormatter
+                                                            .formatFileSize(
+                                                                note.size ??
+                                                                    25000000),
+                                                        style:
+                                                            GoogleFonts.inter(
+                                                                fontSize: 10,
+                                                                color: Colors
+                                                                    .grey),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                if (task != null &&
+                                                    task.isDownloading) ...[
+                                                  Builder(
+                                                    builder: (_) {
+                                                      final pct =
+                                                          (task.progress * 100)
+                                                              .toInt();
+                                                      return Container(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                horizontal: 7,
+                                                                vertical: 3),
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: const Color(
+                                                                  0xFF10B981)
+                                                              .withValues(
+                                                                  alpha: 0.15),
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(6),
+                                                        ),
+                                                        child: Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            const SizedBox(
+                                                              width: 10,
+                                                              height: 10,
+                                                              child:
+                                                                  CircularProgressIndicator(
+                                                                strokeWidth:
+                                                                    1.5,
+                                                                color: Color(
+                                                                    0xFF10B981),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                                width: 5),
+                                                            Text(
+                                                              '$pct%',
+                                                              style: GoogleFonts
+                                                                  .inter(
+                                                                fontSize: 10,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color: const Color(
+                                                                    0xFF10B981),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ] else if (task != null &&
+                                                    task.error != null) ...[
+                                                  IconButton(
+                                                    icon: const Icon(
+                                                        Icons
+                                                            .error_outline_rounded,
+                                                        size: 18,
+                                                        color:
+                                                            Color(0xFFEF4444)),
+                                                    tooltip:
+                                                        'Download error: ${task.error}',
+                                                    onPressed: () {
+                                                      ToastUtils.showSnackBar(
+                                                          context,
+                                                          task.error ??
+                                                              'Download failed. Please check connection.',
+                                                          isError: true);
+                                                    },
+                                                  ),
+                                                ] else if (isDl) ...[
+                                                  IconButton(
+                                                    icon: const Icon(
+                                                        Icons
+                                                            .open_in_new_rounded,
+                                                        size: 18,
+                                                        color:
+                                                            Color(0xFF10B981)),
+                                                    tooltip:
+                                                        'Open in PDF Viewer',
+                                                    onPressed: () =>
+                                                        _handleNoteAction(
+                                                            course, note),
+                                                  ),
+                                                ] else
+                                                  IconButton(
+                                                    icon: const Icon(
+                                                        Icons.download_rounded,
+                                                        size: 18,
+                                                        color:
+                                                            AppColors.primary),
+                                                    tooltip: 'Download offline',
+                                                    onPressed: () =>
+                                                        _handleNoteAction(
+                                                            course, note),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          ),
                         ),
-                      );
-                    },
+                      const SliverToBoxAdapter(child: SizedBox(height: 32)),
+                    ],
                   ),
                 ),
-              const SliverToBoxAdapter(child: SizedBox(height: 32)),
-            ],
-          ),
-        ),
             ],
           ),
         ),
